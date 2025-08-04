@@ -954,7 +954,7 @@ func (x *PriceLevel) GetQuantity() float64 {
 	return 0
 }
 
-// SubscribeRequest 订阅请求 - 一个请求只支持单个币种和单个类型
+// SubscribeRequest 订阅请求
 type SubscribeRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Exchange   string                 `protobuf:"bytes,1,opt,name=exchange,proto3" json:"exchange,omitempty"`                                   // 交易所名称
@@ -2286,7 +2286,7 @@ const file_pkg_protocol_pb_message_proto_rawDesc = "" +
 	"\x06TICKER\x10\x00\x12\t\n" +
 	"\x05KLINE\x10\x01\x12\t\n" +
 	"\x05TRADE\x10\x02\x12\r\n" +
-	"\tORDERBOOK\x10\x03B\x1aZ\x18github.com/riven-blade/datahive/pkg/protocol/pbb\x06proto3"
+	"\tORDERBOOK\x10\x03B1Z/github.com/riven-blade/datahive/pkg/protocol/pbb\x06proto3"
 
 var (
 	file_pkg_protocol_pb_message_proto_rawDescOnce sync.Once
