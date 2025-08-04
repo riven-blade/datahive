@@ -1,0 +1,98 @@
+# DataHive Configuration
+app:
+  name: "DataHive"
+  version: "1.0.0"
+  environment: "development"
+
+# TCP Server Configuration (对接交易所)
+server:
+  host: "0.0.0.0"
+  port: 6789
+  maxConnections: 1000
+  readTimeout: "30s"
+  writeTimeout: "30s"
+  idleTimeout: "120s"
+
+# TCP Client Configuration (便捷调用封装)
+client:
+  defaultHost: "localhost"
+  defaultPort: 6789
+  connectTimeout: "10s"
+  requestTimeout: "30s"
+  retryAttempts: 3
+
+# QuestDB Configuration (时序数据库)
+questdb:
+  host: "localhost"
+  port: 8812
+  database: "qdb"
+  username: "admin"
+  password: "quest"
+  maxConnections: 10
+  connectionTimeout: "10s"
+  queryTimeout: "15s"
+  batchSize: 100
+  flushInterval: "1s"
+  healthCheckInterval: "30s"
+  enableAutoReconnect: true
+
+# Redis Configuration (缓存)
+redis:
+  host: "localhost"
+  port: 6379
+  password: ""
+  database: 0
+  poolSize: 20
+  dialTimeout: "5s"
+  readTimeout: "3s"
+  writeTimeout: "3s"
+  maxRetries: 3
+
+# Exchange Configuration (交易所配置)
+exchanges:
+  binance:
+    enabled: true
+    apiKey: ""
+    secret: ""
+    testnet: false
+    rateLimit: 1200
+
+  bybit:
+    enabled: true
+    apiKey: ""
+    secret: ""
+    testnet: false
+    rateLimit: 120
+
+# Logging Configuration
+logging:
+  level: "info"
+  format: "json"
+  output: "logs/datahive.log"
+  maxSize: 100 # MB
+  maxBackups: 7
+  maxAge: 30 # days
+
+# Spider Configuration (数据爬虫)
+spider:
+  enableKline: true
+  enableTrade: true
+  enableTicker: true
+  enableOrderBook: true
+
+  # 订阅配置
+  defaultSymbols:
+    - "BTC/USDT"
+    - "ETH/USDT"
+    - "BNB/USDT"
+
+  defaultTimeframes:
+    - "1m"
+    - "5m"
+    - "1h"
+    - "1d"
+
+  # 性能配置
+  channelBufferSize: 1000
+  workerPoolSize: 10
+  batchProcessingDelay: "100ms"

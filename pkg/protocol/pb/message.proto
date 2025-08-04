@@ -1,0 +1,272 @@
+syntax = "proto3";
+
+package pb;
+
+option go_package = "datahive/pkg/protocol/pb";
+
+// =====================================================================================
+// 基础消息结构
+// =====================================================================================
+
+// Message 通用消息包装器
+message Message {
+  string id = 1;           // 消息ID
+  ActionType action = 2;   // 动作类型
+  MessageType type = 3;    // 消息类型
+  bytes payload = 4;       // 消息载荷
+  int64 timestamp = 5;     // 时间戳
+}
+
+// MessageType 消息类型枚举
+enum MessageType {
+  REQUEST = 0;
+  RESPONSE = 1;
+  NOTIFICATION = 2;
+  ERROR = 3;
+}
+
+// ActionType 动作类型枚举
+enum ActionType {
+  // 订阅管理
+  SUBSCRIBE = 0;
+  UNSUBSCRIBE = 1;
+  
+  // 数据获取
+  FETCH_MARKETS = 10;
+  FETCH_TICKER = 11;
+  FETCH_KLINES = 12;
+  FETCH_TRADES = 13;
+  FETCH_ORDERBOOK = 14;
+  
+  // 数据推送
+  MARKET_UPDATE = 20;
+  TICKER_UPDATE = 21;
+  KLINE_UPDATE = 22;
+  TRADE_UPDATE = 23;
+  ORDERBOOK_UPDATE = 24;
+}
+
+// Error 错误信息
+message Error {
+  int32 code = 1;
+  string message = 2;
+  string details = 3;
+}
+
+// =====================================================================================
+// 数据结构定义
+// =====================================================================================
+
+// Market 市场信息
+message Market {
+  string id = 1;              // 交易所内部ID
+  string symbol = 2;          // 标准化交易对符号
+  string base = 3;            // 基础货币
+  string quote = 4;           // 计价货币
+  bool active = 5;            // 是否活跃
+  string type = 6;            // 市场类型: spot, futures, swap等
+  bool spot = 7;              // 是否现货
+  bool futures = 8;           // 是否期货
+  bool swap = 9;              // 是否永续合约
+  bool linear = 10;           // 是否线性合约
+  bool inverse = 11;          // 是否反向合约
+  double maker_fee = 12;      // 做市商手续费率
+  double taker_fee = 13;      // 吃单手续费率
+}
+
+// Ticker 行情数据
+message Ticker {
+  string symbol = 1;          // 交易对符号
+  int64 timestamp = 2;        // 时间戳
+  double last = 3;            // 最新价
+  double bid = 4;             // 买一价
+  double ask = 5;             // 卖一价
+  double high = 6;            // 24h最高价
+  double low = 7;             // 24h最低价
+  double open = 8;            // 开盘价
+  double close = 9;           // 收盘价
+  double volume = 10;         // 24h成交量
+  double change = 11;         // 价格变化
+  double change_percent = 12; // 变化百分比
+}
+
+// Kline K线数据
+message Kline {
+  string symbol = 1;          // 交易对符号
+  string exchange = 2;        // 交易所名称
+  string timeframe = 3;       // 时间周期
+  int64 open_time = 4;        // 开盘时间
+  double open = 5;            // 开盘价
+  double high = 6;            // 最高价
+  double low = 7;             // 最低价
+  double close = 8;           // 收盘价
+  double volume = 9;          // 成交量
+  bool closed = 10;           // 是否已收盘
+}
+
+// Trade 交易记录
+message Trade {
+  string id = 1;              // 交易ID
+  string symbol = 2;          // 交易对符号
+  string exchange = 3;        // 交易所名称
+  double price = 4;           // 成交价格
+  double quantity = 5;        // 成交数量
+  string side = 6;            // 买卖方向: buy/sell
+  int64 timestamp = 7;        // 成交时间
+}
+
+// OrderBook 订单簿
+message OrderBook {
+  string symbol = 1;          // 交易对符号
+  int64 timestamp = 2;        // 时间戳
+  repeated PriceLevel bids = 3; // 买单
+  repeated PriceLevel asks = 4; // 卖单
+}
+
+// PriceLevel 价格档位
+message PriceLevel {
+  double price = 1;           // 价格
+  double quantity = 2;        // 数量
+}
+
+
+
+// =====================================================================================
+// 订阅管理
+// =====================================================================================
+
+// SubscribeRequest 订阅请求
+message SubscribeRequest {
+  string exchange = 1;            // 交易所名称
+  string market_type = 2;         // 市场类型: spot, futures, swap
+  repeated string symbols = 3;    // 交易对列表
+  
+  // 数据类型
+  bool ticker = 4;                // 是否订阅行情
+  bool kline = 5;                 // 是否订阅K线
+  bool trade = 6;                 // 是否订阅交易
+  bool orderbook = 7;             // 是否订阅订单簿
+  
+  // 参数
+  string kline_interval = 8;      // K线间隔: 1m, 5m, 1h等
+  int32 orderbook_depth = 9;      // 订单簿深度
+}
+
+// SubscribeResponse 订阅响应
+message SubscribeResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// UnsubscribeRequest 取消订阅请求
+message UnsubscribeRequest {
+  string exchange = 1;                // 交易所名称
+  string market_type = 2;             // 市场类型: spot, futures, swap
+  repeated string symbols = 3;        // 要取消订阅的交易对列表
+  
+  // 要取消的数据类型
+  bool ticker = 4;                    // 是否取消ticker订阅
+  bool kline = 5;                     // 是否取消K线订阅
+  bool trade = 6;                     // 是否取消交易订阅
+  bool orderbook = 7;                 // 是否取消订单簿订阅
+}
+
+// UnsubscribeResponse 取消订阅响应
+message UnsubscribeResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// =====================================================================================
+// 数据获取请求/响应
+// =====================================================================================
+
+// FetchMarketsRequest 获取市场信息请求
+message FetchMarketsRequest {
+  string exchange = 1;
+  string market_type = 2;         // 过滤市场类型
+}
+
+// FetchMarketsResponse 获取市场信息响应
+message FetchMarketsResponse {
+  repeated Market markets = 1;
+}
+
+// FetchTickerRequest 获取行情请求
+message FetchTickerRequest {
+  string exchange = 1;
+  string symbol = 2;
+}
+
+// FetchTickerResponse 获取行情响应
+message FetchTickerResponse {
+  Ticker ticker = 1;
+}
+
+// FetchKlinesRequest 获取K线请求
+message FetchKlinesRequest {
+  string exchange = 1;
+  string symbol = 2;
+  string interval = 3;
+  int64 start_time = 4;
+  int64 end_time = 5;
+  int32 limit = 6;
+}
+
+// FetchKlinesResponse 获取K线响应
+message FetchKlinesResponse {
+  repeated Kline klines = 1;
+}
+
+// FetchTradesRequest 获取交易记录请求
+message FetchTradesRequest {
+  string exchange = 1;
+  string symbol = 2;
+  int64 since = 3;
+  int32 limit = 4;
+}
+
+// FetchTradesResponse 获取交易记录响应
+message FetchTradesResponse {
+  repeated Trade trades = 1;
+}
+
+// FetchOrderBookRequest 获取订单簿请求
+message FetchOrderBookRequest {
+  string exchange = 1;
+  string symbol = 2;
+  int32 limit = 3;
+}
+
+// FetchOrderBookResponse 获取订单簿响应
+message FetchOrderBookResponse {
+  OrderBook orderbook = 1;
+}
+
+// =====================================================================================
+// 数据推送
+// =====================================================================================
+
+// TickerUpdate 行情更新推送
+message TickerUpdate {
+  string subscription_id = 1;
+  Ticker ticker = 2;
+}
+
+// KlineUpdate K线更新推送
+message KlineUpdate {
+  string subscription_id = 1;
+  Kline kline = 2;
+}
+
+// TradeUpdate 交易更新推送
+message TradeUpdate {
+  string subscription_id = 1;
+  Trade trade = 2;
+}
+
+// OrderBookUpdate 订单簿更新推送
+message OrderBookUpdate {
+  string subscription_id = 1;
+  OrderBook orderbook = 2;
+} 
