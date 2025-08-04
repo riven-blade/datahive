@@ -4000,3 +4000,34 @@ func (b *Binance) WatchOrders(ctx context.Context, symbol string, params map[str
 
 	return b.wsPool.WatchOrders(ctx, params)
 }
+
+// =====================================================================================
+// 新增的增强Watch方法 - 支持新协议
+// =====================================================================================
+
+// WatchMiniTicker 监听轻量级ticker数据
+func (b *Binance) WatchMiniTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMiniTicker, error) {
+	if b.wsPool == nil {
+		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
+	}
+
+	return b.wsPool.WatchMiniTicker(ctx, symbol, params)
+}
+
+// WatchMarkPrice 监听标记价格数据(仅期货)
+func (b *Binance) WatchMarkPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMarkPrice, error) {
+	if b.wsPool == nil {
+		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
+	}
+
+	return b.wsPool.WatchMarkPrice(ctx, symbol, params)
+}
+
+// WatchBookTicker 监听最优买卖价数据
+func (b *Binance) WatchBookTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchBookTicker, error) {
+	if b.wsPool == nil {
+		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
+	}
+
+	return b.wsPool.WatchBookTicker(ctx, symbol, params)
+}

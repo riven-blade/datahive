@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -623,4 +624,74 @@ func (ws *BinanceWebSocket) GetConnectionHealth() map[string]interface{} {
 	}
 
 	return health
+}
+
+// =====================================================================================
+// 新增的增强Watch方法 - 支持新协议
+// =====================================================================================
+
+// WatchMiniTicker 监听轻量级ticker数据
+func (ws *BinanceWebSocket) WatchMiniTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMiniTicker, error) {
+	streamName := fmt.Sprintf("%s@miniTicker", strings.ToLower(symbol))
+
+	if stream, ok := params["stream_name"].(string); ok {
+		streamName = stream
+	}
+
+	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "miniTicker")
+	if err != nil {
+		return "", nil, err
+	}
+
+	if err := ws.subscribe(streamName); err != nil {
+		ws.streamManager.Unsubscribe(subscriptionID)
+		return "", nil, err
+	}
+
+	miniTickerChan := userChan.(chan *ccxt.WatchMiniTicker)
+	return subscriptionID, (<-chan *ccxt.WatchMiniTicker)(miniTickerChan), nil
+}
+
+// WatchMarkPrice 监听标记价格数据(仅期货)
+func (ws *BinanceWebSocket) WatchMarkPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMarkPrice, error) {
+	streamName := fmt.Sprintf("%s@markPrice", strings.ToLower(symbol))
+
+	if stream, ok := params["stream_name"].(string); ok {
+		streamName = stream
+	}
+
+	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "markPrice")
+	if err != nil {
+		return "", nil, err
+	}
+
+	if err := ws.subscribe(streamName); err != nil {
+		ws.streamManager.Unsubscribe(subscriptionID)
+		return "", nil, err
+	}
+
+	markPriceChan := userChan.(chan *ccxt.WatchMarkPrice)
+	return subscriptionID, (<-chan *ccxt.WatchMarkPrice)(markPriceChan), nil
+}
+
+// WatchBookTicker 监听最优买卖价数据
+func (ws *BinanceWebSocket) WatchBookTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchBookTicker, error) {
+	streamName := fmt.Sprintf("%s@bookTicker", strings.ToLower(symbol))
+
+	if stream, ok := params["stream_name"].(string); ok {
+		streamName = stream
+	}
+
+	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "bookTicker")
+	if err != nil {
+		return "", nil, err
+	}
+
+	if err := ws.subscribe(streamName); err != nil {
+		ws.streamManager.Unsubscribe(subscriptionID)
+		return "", nil, err
+	}
+
+	bookTickerChan := userChan.(chan *ccxt.WatchBookTicker)
+	return subscriptionID, (<-chan *ccxt.WatchBookTicker)(bookTickerChan), nil
 }

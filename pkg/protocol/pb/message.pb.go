@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.6
 // 	protoc        v5.28.1
-// source: pkg/protocol/pb/message.proto
+// source: pb/message.proto
 
 package pb
 
@@ -58,11 +58,11 @@ func (x MessageType) String() string {
 }
 
 func (MessageType) Descriptor() protoreflect.EnumDescriptor {
-	return file_pkg_protocol_pb_message_proto_enumTypes[0].Descriptor()
+	return file_pb_message_proto_enumTypes[0].Descriptor()
 }
 
 func (MessageType) Type() protoreflect.EnumType {
-	return &file_pkg_protocol_pb_message_proto_enumTypes[0]
+	return &file_pb_message_proto_enumTypes[0]
 }
 
 func (x MessageType) Number() protoreflect.EnumNumber {
@@ -71,7 +71,7 @@ func (x MessageType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use MessageType.Descriptor instead.
 func (MessageType) EnumDescriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{0}
+	return file_pb_message_proto_rawDescGZIP(), []int{0}
 }
 
 // ActionType 动作类型枚举
@@ -83,17 +83,21 @@ const (
 	ActionType_UNSUBSCRIBE ActionType = 1
 	// 数据获取
 	ActionType_FETCH_MARKETS   ActionType = 10
-	ActionType_FETCH_TICKER    ActionType = 11
+	ActionType_FETCH_TICKER    ActionType = 11 // 返回完整ticker数据
 	ActionType_FETCH_TICKERS   ActionType = 12
 	ActionType_FETCH_KLINES    ActionType = 13
 	ActionType_FETCH_TRADES    ActionType = 14
 	ActionType_FETCH_ORDERBOOK ActionType = 15
-	// 数据推送
-	ActionType_MARKET_UPDATE    ActionType = 20
-	ActionType_PRICE_UPDATE     ActionType = 21 // 轻量级价格更新
-	ActionType_KLINE_UPDATE     ActionType = 22
-	ActionType_TRADE_UPDATE     ActionType = 23
-	ActionType_ORDERBOOK_UPDATE ActionType = 24
+	// 数据推送 - 增强版本
+	ActionType_MARKET_UPDATE      ActionType = 20
+	ActionType_PRICE_UPDATE       ActionType = 21 // 通用价格更新
+	ActionType_MINI_TICKER_UPDATE ActionType = 22 // 轻量级ticker更新
+	ActionType_MARK_PRICE_UPDATE  ActionType = 23 // 标记价格更新(期货专用)
+	ActionType_BOOK_TICKER_UPDATE ActionType = 24 // 最优买卖价更新
+	ActionType_FULL_TICKER_UPDATE ActionType = 25 // 完整ticker更新
+	ActionType_KLINE_UPDATE       ActionType = 26
+	ActionType_TRADE_UPDATE       ActionType = 27
+	ActionType_ORDERBOOK_UPDATE   ActionType = 28
 )
 
 // Enum value maps for ActionType.
@@ -109,24 +113,32 @@ var (
 		15: "FETCH_ORDERBOOK",
 		20: "MARKET_UPDATE",
 		21: "PRICE_UPDATE",
-		22: "KLINE_UPDATE",
-		23: "TRADE_UPDATE",
-		24: "ORDERBOOK_UPDATE",
+		22: "MINI_TICKER_UPDATE",
+		23: "MARK_PRICE_UPDATE",
+		24: "BOOK_TICKER_UPDATE",
+		25: "FULL_TICKER_UPDATE",
+		26: "KLINE_UPDATE",
+		27: "TRADE_UPDATE",
+		28: "ORDERBOOK_UPDATE",
 	}
 	ActionType_value = map[string]int32{
-		"SUBSCRIBE":        0,
-		"UNSUBSCRIBE":      1,
-		"FETCH_MARKETS":    10,
-		"FETCH_TICKER":     11,
-		"FETCH_TICKERS":    12,
-		"FETCH_KLINES":     13,
-		"FETCH_TRADES":     14,
-		"FETCH_ORDERBOOK":  15,
-		"MARKET_UPDATE":    20,
-		"PRICE_UPDATE":     21,
-		"KLINE_UPDATE":     22,
-		"TRADE_UPDATE":     23,
-		"ORDERBOOK_UPDATE": 24,
+		"SUBSCRIBE":          0,
+		"UNSUBSCRIBE":        1,
+		"FETCH_MARKETS":      10,
+		"FETCH_TICKER":       11,
+		"FETCH_TICKERS":      12,
+		"FETCH_KLINES":       13,
+		"FETCH_TRADES":       14,
+		"FETCH_ORDERBOOK":    15,
+		"MARKET_UPDATE":      20,
+		"PRICE_UPDATE":       21,
+		"MINI_TICKER_UPDATE": 22,
+		"MARK_PRICE_UPDATE":  23,
+		"BOOK_TICKER_UPDATE": 24,
+		"FULL_TICKER_UPDATE": 25,
+		"KLINE_UPDATE":       26,
+		"TRADE_UPDATE":       27,
+		"ORDERBOOK_UPDATE":   28,
 	}
 )
 
@@ -141,11 +153,11 @@ func (x ActionType) String() string {
 }
 
 func (ActionType) Descriptor() protoreflect.EnumDescriptor {
-	return file_pkg_protocol_pb_message_proto_enumTypes[1].Descriptor()
+	return file_pb_message_proto_enumTypes[1].Descriptor()
 }
 
 func (ActionType) Type() protoreflect.EnumType {
-	return &file_pkg_protocol_pb_message_proto_enumTypes[1]
+	return &file_pb_message_proto_enumTypes[1]
 }
 
 func (x ActionType) Number() protoreflect.EnumNumber {
@@ -154,32 +166,44 @@ func (x ActionType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ActionType.Descriptor instead.
 func (ActionType) EnumDescriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{1}
+	return file_pb_message_proto_rawDescGZIP(), []int{1}
 }
 
 // DataType 数据类型枚举
 type DataType int32
 
 const (
-	DataType_PRICE     DataType = 0 // 轻量级价格数据
-	DataType_KLINE     DataType = 1 // K线数据
-	DataType_TRADE     DataType = 2 // 交易数据
-	DataType_ORDERBOOK DataType = 3 // 订单簿数据
+	DataType_PRICE       DataType = 0 // 通用价格数据
+	DataType_MINI_TICKER DataType = 1 // 轻量级ticker
+	DataType_MARK_PRICE  DataType = 2 // 标记价格(仅期货)
+	DataType_BOOK_TICKER DataType = 3 // 最优买卖价
+	DataType_FULL_TICKER DataType = 4 // 完整ticker
+	DataType_KLINE       DataType = 5 // K线数据
+	DataType_TRADE       DataType = 6 // 交易数据
+	DataType_ORDERBOOK   DataType = 7 // 订单簿数据
 )
 
 // Enum value maps for DataType.
 var (
 	DataType_name = map[int32]string{
 		0: "PRICE",
-		1: "KLINE",
-		2: "TRADE",
-		3: "ORDERBOOK",
+		1: "MINI_TICKER",
+		2: "MARK_PRICE",
+		3: "BOOK_TICKER",
+		4: "FULL_TICKER",
+		5: "KLINE",
+		6: "TRADE",
+		7: "ORDERBOOK",
 	}
 	DataType_value = map[string]int32{
-		"PRICE":     0,
-		"KLINE":     1,
-		"TRADE":     2,
-		"ORDERBOOK": 3,
+		"PRICE":       0,
+		"MINI_TICKER": 1,
+		"MARK_PRICE":  2,
+		"BOOK_TICKER": 3,
+		"FULL_TICKER": 4,
+		"KLINE":       5,
+		"TRADE":       6,
+		"ORDERBOOK":   7,
 	}
 )
 
@@ -194,11 +218,11 @@ func (x DataType) String() string {
 }
 
 func (DataType) Descriptor() protoreflect.EnumDescriptor {
-	return file_pkg_protocol_pb_message_proto_enumTypes[2].Descriptor()
+	return file_pb_message_proto_enumTypes[2].Descriptor()
 }
 
 func (DataType) Type() protoreflect.EnumType {
-	return &file_pkg_protocol_pb_message_proto_enumTypes[2]
+	return &file_pb_message_proto_enumTypes[2]
 }
 
 func (x DataType) Number() protoreflect.EnumNumber {
@@ -207,7 +231,7 @@ func (x DataType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DataType.Descriptor instead.
 func (DataType) EnumDescriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{2}
+	return file_pb_message_proto_rawDescGZIP(), []int{2}
 }
 
 // Message 通用消息包装器
@@ -224,7 +248,7 @@ type Message struct {
 
 func (x *Message) Reset() {
 	*x = Message{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[0]
+	mi := &file_pb_message_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -236,7 +260,7 @@ func (x *Message) String() string {
 func (*Message) ProtoMessage() {}
 
 func (x *Message) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[0]
+	mi := &file_pb_message_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -249,7 +273,7 @@ func (x *Message) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Message.ProtoReflect.Descriptor instead.
 func (*Message) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{0}
+	return file_pb_message_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Message) GetId() string {
@@ -299,7 +323,7 @@ type Error struct {
 
 func (x *Error) Reset() {
 	*x = Error{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[1]
+	mi := &file_pb_message_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -311,7 +335,7 @@ func (x *Error) String() string {
 func (*Error) ProtoMessage() {}
 
 func (x *Error) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[1]
+	mi := &file_pb_message_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -324,7 +348,7 @@ func (x *Error) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Error.ProtoReflect.Descriptor instead.
 func (*Error) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{1}
+	return file_pb_message_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Error) GetCode() int32 {
@@ -387,7 +411,7 @@ type Market struct {
 
 func (x *Market) Reset() {
 	*x = Market{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[2]
+	mi := &file_pb_message_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -399,7 +423,7 @@ func (x *Market) String() string {
 func (*Market) ProtoMessage() {}
 
 func (x *Market) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[2]
+	mi := &file_pb_message_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -412,7 +436,7 @@ func (x *Market) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Market.ProtoReflect.Descriptor instead.
 func (*Market) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{2}
+	return file_pb_message_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Market) GetId() string {
@@ -602,7 +626,7 @@ type MarketPrecision struct {
 
 func (x *MarketPrecision) Reset() {
 	*x = MarketPrecision{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[3]
+	mi := &file_pb_message_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -614,7 +638,7 @@ func (x *MarketPrecision) String() string {
 func (*MarketPrecision) ProtoMessage() {}
 
 func (x *MarketPrecision) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[3]
+	mi := &file_pb_message_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -627,7 +651,7 @@ func (x *MarketPrecision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarketPrecision.ProtoReflect.Descriptor instead.
 func (*MarketPrecision) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{3}
+	return file_pb_message_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *MarketPrecision) GetAmount() float64 {
@@ -664,7 +688,7 @@ type MarketLimits struct {
 
 func (x *MarketLimits) Reset() {
 	*x = MarketLimits{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[4]
+	mi := &file_pb_message_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -676,7 +700,7 @@ func (x *MarketLimits) String() string {
 func (*MarketLimits) ProtoMessage() {}
 
 func (x *MarketLimits) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[4]
+	mi := &file_pb_message_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -689,7 +713,7 @@ func (x *MarketLimits) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarketLimits.ProtoReflect.Descriptor instead.
 func (*MarketLimits) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{4}
+	return file_pb_message_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *MarketLimits) GetLeverage() *LimitRange {
@@ -731,7 +755,7 @@ type LimitRange struct {
 
 func (x *LimitRange) Reset() {
 	*x = LimitRange{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[5]
+	mi := &file_pb_message_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -743,7 +767,7 @@ func (x *LimitRange) String() string {
 func (*LimitRange) ProtoMessage() {}
 
 func (x *LimitRange) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[5]
+	mi := &file_pb_message_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -756,7 +780,7 @@ func (x *LimitRange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LimitRange.ProtoReflect.Descriptor instead.
 func (*LimitRange) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{5}
+	return file_pb_message_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *LimitRange) GetMin() float64 {
@@ -773,28 +797,45 @@ func (x *LimitRange) GetMax() float64 {
 	return 0
 }
 
-// Ticker 行情数据
+// Ticker 行情数据 - 增强版本
 type Ticker struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Symbol        string                 `protobuf:"bytes,1,opt,name=symbol,proto3" json:"symbol,omitempty"`                                       // 交易对符号
-	Timestamp     int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                                // 时间戳
-	Last          float64                `protobuf:"fixed64,3,opt,name=last,proto3" json:"last,omitempty"`                                         // 最新价
-	Bid           float64                `protobuf:"fixed64,4,opt,name=bid,proto3" json:"bid,omitempty"`                                           // 买一价
-	Ask           float64                `protobuf:"fixed64,5,opt,name=ask,proto3" json:"ask,omitempty"`                                           // 卖一价
-	High          float64                `protobuf:"fixed64,6,opt,name=high,proto3" json:"high,omitempty"`                                         // 24h最高价
-	Low           float64                `protobuf:"fixed64,7,opt,name=low,proto3" json:"low,omitempty"`                                           // 24h最低价
-	Open          float64                `protobuf:"fixed64,8,opt,name=open,proto3" json:"open,omitempty"`                                         // 开盘价
-	Close         float64                `protobuf:"fixed64,9,opt,name=close,proto3" json:"close,omitempty"`                                       // 收盘价
-	Volume        float64                `protobuf:"fixed64,10,opt,name=volume,proto3" json:"volume,omitempty"`                                    // 24h成交量
-	Change        float64                `protobuf:"fixed64,11,opt,name=change,proto3" json:"change,omitempty"`                                    // 价格变化
-	ChangePercent float64                `protobuf:"fixed64,12,opt,name=change_percent,json=changePercent,proto3" json:"change_percent,omitempty"` // 变化百分比
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Symbol    string                 `protobuf:"bytes,1,opt,name=symbol,proto3" json:"symbol,omitempty"`        // 交易对符号
+	Timestamp int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"` // 时间戳
+	// 基础价格信息
+	Last      float64 `protobuf:"fixed64,3,opt,name=last,proto3" json:"last,omitempty"`                            // 最新成交价
+	Bid       float64 `protobuf:"fixed64,4,opt,name=bid,proto3" json:"bid,omitempty"`                              // 买一价
+	Ask       float64 `protobuf:"fixed64,5,opt,name=ask,proto3" json:"ask,omitempty"`                              // 卖一价
+	BidVolume float64 `protobuf:"fixed64,6,opt,name=bid_volume,json=bidVolume,proto3" json:"bid_volume,omitempty"` // 买一量
+	AskVolume float64 `protobuf:"fixed64,7,opt,name=ask_volume,json=askVolume,proto3" json:"ask_volume,omitempty"` // 卖一量
+	// 24小时统计
+	High          float64 `protobuf:"fixed64,8,opt,name=high,proto3" json:"high,omitempty"`                                         // 24h最高价
+	Low           float64 `protobuf:"fixed64,9,opt,name=low,proto3" json:"low,omitempty"`                                           // 24h最低价
+	Open          float64 `protobuf:"fixed64,10,opt,name=open,proto3" json:"open,omitempty"`                                        // 开盘价
+	Close         float64 `protobuf:"fixed64,11,opt,name=close,proto3" json:"close,omitempty"`                                      // 收盘价
+	PreviousClose float64 `protobuf:"fixed64,12,opt,name=previous_close,json=previousClose,proto3" json:"previous_close,omitempty"` // 前收盘价
+	Volume        float64 `protobuf:"fixed64,13,opt,name=volume,proto3" json:"volume,omitempty"`                                    // 24h成交量(基础资产)
+	QuoteVolume   float64 `protobuf:"fixed64,14,opt,name=quote_volume,json=quoteVolume,proto3" json:"quote_volume,omitempty"`       // 24h成交量(计价资产)
+	Change        float64 `protobuf:"fixed64,15,opt,name=change,proto3" json:"change,omitempty"`                                    // 价格变化
+	ChangePercent float64 `protobuf:"fixed64,16,opt,name=change_percent,json=changePercent,proto3" json:"change_percent,omitempty"` // 变化百分比
+	Vwap          float64 `protobuf:"fixed64,17,opt,name=vwap,proto3" json:"vwap,omitempty"`                                        // 成交量加权平均价
+	// 期货特有字段
+	MarkPrice            float64 `protobuf:"fixed64,18,opt,name=mark_price,json=markPrice,proto3" json:"mark_price,omitempty"`                                    // 标记价格
+	IndexPrice           float64 `protobuf:"fixed64,19,opt,name=index_price,json=indexPrice,proto3" json:"index_price,omitempty"`                                 // 指数价格
+	FundingRate          float64 `protobuf:"fixed64,20,opt,name=funding_rate,json=fundingRate,proto3" json:"funding_rate,omitempty"`                              // 资金费率
+	FundingTime          int64   `protobuf:"varint,21,opt,name=funding_time,json=fundingTime,proto3" json:"funding_time,omitempty"`                               // 下次资金费用时间
+	EstimatedSettlePrice float64 `protobuf:"fixed64,22,opt,name=estimated_settle_price,json=estimatedSettlePrice,proto3" json:"estimated_settle_price,omitempty"` // 预估结算价
+	// 市场类型标识
+	MarketType string `protobuf:"bytes,23,opt,name=market_type,json=marketType,proto3" json:"market_type,omitempty"` // spot, futures, swap
+	// 原始数据
+	Info          string `protobuf:"bytes,24,opt,name=info,proto3" json:"info,omitempty"` // JSON格式的原始数据
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Ticker) Reset() {
 	*x = Ticker{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[6]
+	mi := &file_pb_message_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -806,7 +847,7 @@ func (x *Ticker) String() string {
 func (*Ticker) ProtoMessage() {}
 
 func (x *Ticker) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[6]
+	mi := &file_pb_message_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -819,7 +860,7 @@ func (x *Ticker) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ticker.ProtoReflect.Descriptor instead.
 func (*Ticker) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{6}
+	return file_pb_message_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Ticker) GetSymbol() string {
@@ -857,6 +898,20 @@ func (x *Ticker) GetAsk() float64 {
 	return 0
 }
 
+func (x *Ticker) GetBidVolume() float64 {
+	if x != nil {
+		return x.BidVolume
+	}
+	return 0
+}
+
+func (x *Ticker) GetAskVolume() float64 {
+	if x != nil {
+		return x.AskVolume
+	}
+	return 0
+}
+
 func (x *Ticker) GetHigh() float64 {
 	if x != nil {
 		return x.High
@@ -885,9 +940,23 @@ func (x *Ticker) GetClose() float64 {
 	return 0
 }
 
+func (x *Ticker) GetPreviousClose() float64 {
+	if x != nil {
+		return x.PreviousClose
+	}
+	return 0
+}
+
 func (x *Ticker) GetVolume() float64 {
 	if x != nil {
 		return x.Volume
+	}
+	return 0
+}
+
+func (x *Ticker) GetQuoteVolume() float64 {
+	if x != nil {
+		return x.QuoteVolume
 	}
 	return 0
 }
@@ -904,6 +973,62 @@ func (x *Ticker) GetChangePercent() float64 {
 		return x.ChangePercent
 	}
 	return 0
+}
+
+func (x *Ticker) GetVwap() float64 {
+	if x != nil {
+		return x.Vwap
+	}
+	return 0
+}
+
+func (x *Ticker) GetMarkPrice() float64 {
+	if x != nil {
+		return x.MarkPrice
+	}
+	return 0
+}
+
+func (x *Ticker) GetIndexPrice() float64 {
+	if x != nil {
+		return x.IndexPrice
+	}
+	return 0
+}
+
+func (x *Ticker) GetFundingRate() float64 {
+	if x != nil {
+		return x.FundingRate
+	}
+	return 0
+}
+
+func (x *Ticker) GetFundingTime() int64 {
+	if x != nil {
+		return x.FundingTime
+	}
+	return 0
+}
+
+func (x *Ticker) GetEstimatedSettlePrice() float64 {
+	if x != nil {
+		return x.EstimatedSettlePrice
+	}
+	return 0
+}
+
+func (x *Ticker) GetMarketType() string {
+	if x != nil {
+		return x.MarketType
+	}
+	return ""
+}
+
+func (x *Ticker) GetInfo() string {
+	if x != nil {
+		return x.Info
+	}
+	return ""
 }
 
 // Kline K线数据
@@ -925,7 +1050,7 @@ type Kline struct {
 
 func (x *Kline) Reset() {
 	*x = Kline{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[7]
+	mi := &file_pb_message_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -937,7 +1062,7 @@ func (x *Kline) String() string {
 func (*Kline) ProtoMessage() {}
 
 func (x *Kline) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[7]
+	mi := &file_pb_message_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -950,7 +1075,7 @@ func (x *Kline) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Kline.ProtoReflect.Descriptor instead.
 func (*Kline) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{7}
+	return file_pb_message_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Kline) GetSymbol() string {
@@ -1039,7 +1164,7 @@ type Trade struct {
 
 func (x *Trade) Reset() {
 	*x = Trade{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[8]
+	mi := &file_pb_message_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1051,7 +1176,7 @@ func (x *Trade) String() string {
 func (*Trade) ProtoMessage() {}
 
 func (x *Trade) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[8]
+	mi := &file_pb_message_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1064,7 +1189,7 @@ func (x *Trade) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Trade.ProtoReflect.Descriptor instead.
 func (*Trade) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{8}
+	return file_pb_message_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Trade) GetId() string {
@@ -1128,7 +1253,7 @@ type Price struct {
 
 func (x *Price) Reset() {
 	*x = Price{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[9]
+	mi := &file_pb_message_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1140,7 +1265,7 @@ func (x *Price) String() string {
 func (*Price) ProtoMessage() {}
 
 func (x *Price) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[9]
+	mi := &file_pb_message_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1153,7 +1278,7 @@ func (x *Price) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Price.ProtoReflect.Descriptor instead.
 func (*Price) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{9}
+	return file_pb_message_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Price) GetSymbol() string {
@@ -1177,6 +1302,285 @@ func (x *Price) GetTimestamp() int64 {
 	return 0
 }
 
+// MiniTicker 轻量级ticker数据
+type MiniTicker struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Symbol        string                 `protobuf:"bytes,1,opt,name=symbol,proto3" json:"symbol,omitempty"`                                // 交易对符号
+	Timestamp     int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                         // 时间戳
+	Open          float64                `protobuf:"fixed64,3,opt,name=open,proto3" json:"open,omitempty"`                                  // 开盘价
+	High          float64                `protobuf:"fixed64,4,opt,name=high,proto3" json:"high,omitempty"`                                  // 最高价
+	Low           float64                `protobuf:"fixed64,5,opt,name=low,proto3" json:"low,omitempty"`                                    // 最低价
+	Close         float64                `protobuf:"fixed64,6,opt,name=close,proto3" json:"close,omitempty"`                                // 收盘价(最新价)
+	Volume        float64                `protobuf:"fixed64,7,opt,name=volume,proto3" json:"volume,omitempty"`                              // 成交量
+	QuoteVolume   float64                `protobuf:"fixed64,8,opt,name=quote_volume,json=quoteVolume,proto3" json:"quote_volume,omitempty"` // 计价资产成交量
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MiniTicker) Reset() {
+	*x = MiniTicker{}
+	mi := &file_pb_message_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MiniTicker) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MiniTicker) ProtoMessage() {}
+
+func (x *MiniTicker) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_message_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MiniTicker.ProtoReflect.Descriptor instead.
+func (*MiniTicker) Descriptor() ([]byte, []int) {
+	return file_pb_message_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *MiniTicker) GetSymbol() string {
+	if x != nil {
+		return x.Symbol
+	}
+	return ""
+}
+
+func (x *MiniTicker) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *MiniTicker) GetOpen() float64 {
+	if x != nil {
+		return x.Open
+	}
+	return 0
+}
+
+func (x *MiniTicker) GetHigh() float64 {
+	if x != nil {
+		return x.High
+	}
+	return 0
+}
+
+func (x *MiniTicker) GetLow() float64 {
+	if x != nil {
+		return x.Low
+	}
+	return 0
+}
+
+func (x *MiniTicker) GetClose() float64 {
+	if x != nil {
+		return x.Close
+	}
+	return 0
+}
+
+func (x *MiniTicker) GetVolume() float64 {
+	if x != nil {
+		return x.Volume
+	}
+	return 0
+}
+
+func (x *MiniTicker) GetQuoteVolume() float64 {
+	if x != nil {
+		return x.QuoteVolume
+	}
+	return 0
+}
+
+// MarkPrice 标记价格数据(仅期货)
+type MarkPrice struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Symbol               string                 `protobuf:"bytes,1,opt,name=symbol,proto3" json:"symbol,omitempty"`                                                             // 交易对符号
+	Timestamp            int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                                                      // 时间戳
+	MarkPrice            float64                `protobuf:"fixed64,3,opt,name=mark_price,json=markPrice,proto3" json:"mark_price,omitempty"`                                    // 标记价格
+	IndexPrice           float64                `protobuf:"fixed64,4,opt,name=index_price,json=indexPrice,proto3" json:"index_price,omitempty"`                                 // 指数价格
+	FundingRate          float64                `protobuf:"fixed64,5,opt,name=funding_rate,json=fundingRate,proto3" json:"funding_rate,omitempty"`                              // 资金费率
+	FundingTime          int64                  `protobuf:"varint,6,opt,name=funding_time,json=fundingTime,proto3" json:"funding_time,omitempty"`                               // 下次资金费用时间
+	EstimatedSettlePrice float64                `protobuf:"fixed64,7,opt,name=estimated_settle_price,json=estimatedSettlePrice,proto3" json:"estimated_settle_price,omitempty"` // 预估结算价
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *MarkPrice) Reset() {
+	*x = MarkPrice{}
+	mi := &file_pb_message_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarkPrice) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarkPrice) ProtoMessage() {}
+
+func (x *MarkPrice) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_message_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarkPrice.ProtoReflect.Descriptor instead.
+func (*MarkPrice) Descriptor() ([]byte, []int) {
+	return file_pb_message_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *MarkPrice) GetSymbol() string {
+	if x != nil {
+		return x.Symbol
+	}
+	return ""
+}
+
+func (x *MarkPrice) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *MarkPrice) GetMarkPrice() float64 {
+	if x != nil {
+		return x.MarkPrice
+	}
+	return 0
+}
+
+func (x *MarkPrice) GetIndexPrice() float64 {
+	if x != nil {
+		return x.IndexPrice
+	}
+	return 0
+}
+
+func (x *MarkPrice) GetFundingRate() float64 {
+	if x != nil {
+		return x.FundingRate
+	}
+	return 0
+}
+
+func (x *MarkPrice) GetFundingTime() int64 {
+	if x != nil {
+		return x.FundingTime
+	}
+	return 0
+}
+
+func (x *MarkPrice) GetEstimatedSettlePrice() float64 {
+	if x != nil {
+		return x.EstimatedSettlePrice
+	}
+	return 0
+}
+
+// BookTicker 最优买卖价
+type BookTicker struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Symbol        string                 `protobuf:"bytes,1,opt,name=symbol,proto3" json:"symbol,omitempty"`                                // 交易对符号
+	Timestamp     int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                         // 时间戳
+	BidPrice      float64                `protobuf:"fixed64,3,opt,name=bid_price,json=bidPrice,proto3" json:"bid_price,omitempty"`          // 最优买价
+	BidQuantity   float64                `protobuf:"fixed64,4,opt,name=bid_quantity,json=bidQuantity,proto3" json:"bid_quantity,omitempty"` // 买量
+	AskPrice      float64                `protobuf:"fixed64,5,opt,name=ask_price,json=askPrice,proto3" json:"ask_price,omitempty"`          // 最优卖价
+	AskQuantity   float64                `protobuf:"fixed64,6,opt,name=ask_quantity,json=askQuantity,proto3" json:"ask_quantity,omitempty"` // 卖量
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BookTicker) Reset() {
+	*x = BookTicker{}
+	mi := &file_pb_message_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BookTicker) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BookTicker) ProtoMessage() {}
+
+func (x *BookTicker) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_message_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BookTicker.ProtoReflect.Descriptor instead.
+func (*BookTicker) Descriptor() ([]byte, []int) {
+	return file_pb_message_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *BookTicker) GetSymbol() string {
+	if x != nil {
+		return x.Symbol
+	}
+	return ""
+}
+
+func (x *BookTicker) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *BookTicker) GetBidPrice() float64 {
+	if x != nil {
+		return x.BidPrice
+	}
+	return 0
+}
+
+func (x *BookTicker) GetBidQuantity() float64 {
+	if x != nil {
+		return x.BidQuantity
+	}
+	return 0
+}
+
+func (x *BookTicker) GetAskPrice() float64 {
+	if x != nil {
+		return x.AskPrice
+	}
+	return 0
+}
+
+func (x *BookTicker) GetAskQuantity() float64 {
+	if x != nil {
+		return x.AskQuantity
+	}
+	return 0
+}
+
 // OrderBook 订单簿
 type OrderBook struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1190,7 +1594,7 @@ type OrderBook struct {
 
 func (x *OrderBook) Reset() {
 	*x = OrderBook{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[10]
+	mi := &file_pb_message_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1202,7 +1606,7 @@ func (x *OrderBook) String() string {
 func (*OrderBook) ProtoMessage() {}
 
 func (x *OrderBook) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[10]
+	mi := &file_pb_message_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1215,7 +1619,7 @@ func (x *OrderBook) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrderBook.ProtoReflect.Descriptor instead.
 func (*OrderBook) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{10}
+	return file_pb_message_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *OrderBook) GetSymbol() string {
@@ -1257,7 +1661,7 @@ type PriceLevel struct {
 
 func (x *PriceLevel) Reset() {
 	*x = PriceLevel{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[11]
+	mi := &file_pb_message_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1269,7 +1673,7 @@ func (x *PriceLevel) String() string {
 func (*PriceLevel) ProtoMessage() {}
 
 func (x *PriceLevel) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[11]
+	mi := &file_pb_message_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1282,7 +1686,7 @@ func (x *PriceLevel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PriceLevel.ProtoReflect.Descriptor instead.
 func (*PriceLevel) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{11}
+	return file_pb_message_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *PriceLevel) GetPrice() float64 {
@@ -1315,7 +1719,7 @@ type SubscribeRequest struct {
 
 func (x *SubscribeRequest) Reset() {
 	*x = SubscribeRequest{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[12]
+	mi := &file_pb_message_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1327,7 +1731,7 @@ func (x *SubscribeRequest) String() string {
 func (*SubscribeRequest) ProtoMessage() {}
 
 func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[12]
+	mi := &file_pb_message_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1340,7 +1744,7 @@ func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeRequest.ProtoReflect.Descriptor instead.
 func (*SubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{12}
+	return file_pb_message_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *SubscribeRequest) GetExchange() string {
@@ -1397,7 +1801,7 @@ type SubscribeResponse struct {
 
 func (x *SubscribeResponse) Reset() {
 	*x = SubscribeResponse{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[13]
+	mi := &file_pb_message_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1409,7 +1813,7 @@ func (x *SubscribeResponse) String() string {
 func (*SubscribeResponse) ProtoMessage() {}
 
 func (x *SubscribeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[13]
+	mi := &file_pb_message_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1422,7 +1826,7 @@ func (x *SubscribeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeResponse.ProtoReflect.Descriptor instead.
 func (*SubscribeResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{13}
+	return file_pb_message_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *SubscribeResponse) GetSuccess() bool {
@@ -1456,7 +1860,7 @@ type UnsubscribeRequest struct {
 
 func (x *UnsubscribeRequest) Reset() {
 	*x = UnsubscribeRequest{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[14]
+	mi := &file_pb_message_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1468,7 +1872,7 @@ func (x *UnsubscribeRequest) String() string {
 func (*UnsubscribeRequest) ProtoMessage() {}
 
 func (x *UnsubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[14]
+	mi := &file_pb_message_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1481,7 +1885,7 @@ func (x *UnsubscribeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnsubscribeRequest.ProtoReflect.Descriptor instead.
 func (*UnsubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{14}
+	return file_pb_message_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *UnsubscribeRequest) GetTopic() string {
@@ -1502,7 +1906,7 @@ type UnsubscribeResponse struct {
 
 func (x *UnsubscribeResponse) Reset() {
 	*x = UnsubscribeResponse{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[15]
+	mi := &file_pb_message_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1514,7 +1918,7 @@ func (x *UnsubscribeResponse) String() string {
 func (*UnsubscribeResponse) ProtoMessage() {}
 
 func (x *UnsubscribeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[15]
+	mi := &file_pb_message_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1527,7 +1931,7 @@ func (x *UnsubscribeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnsubscribeResponse.ProtoReflect.Descriptor instead.
 func (*UnsubscribeResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{15}
+	return file_pb_message_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *UnsubscribeResponse) GetSuccess() bool {
@@ -1556,7 +1960,7 @@ type FetchMarketsRequest struct {
 
 func (x *FetchMarketsRequest) Reset() {
 	*x = FetchMarketsRequest{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[16]
+	mi := &file_pb_message_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1568,7 +1972,7 @@ func (x *FetchMarketsRequest) String() string {
 func (*FetchMarketsRequest) ProtoMessage() {}
 
 func (x *FetchMarketsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[16]
+	mi := &file_pb_message_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1581,7 +1985,7 @@ func (x *FetchMarketsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchMarketsRequest.ProtoReflect.Descriptor instead.
 func (*FetchMarketsRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{16}
+	return file_pb_message_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *FetchMarketsRequest) GetExchange() string {
@@ -1615,7 +2019,7 @@ type FetchMarketsResponse struct {
 
 func (x *FetchMarketsResponse) Reset() {
 	*x = FetchMarketsResponse{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[17]
+	mi := &file_pb_message_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1627,7 +2031,7 @@ func (x *FetchMarketsResponse) String() string {
 func (*FetchMarketsResponse) ProtoMessage() {}
 
 func (x *FetchMarketsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[17]
+	mi := &file_pb_message_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1640,7 +2044,7 @@ func (x *FetchMarketsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchMarketsResponse.ProtoReflect.Descriptor instead.
 func (*FetchMarketsResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{17}
+	return file_pb_message_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *FetchMarketsResponse) GetMarkets() []*Market {
@@ -1662,7 +2066,7 @@ type FetchTickerRequest struct {
 
 func (x *FetchTickerRequest) Reset() {
 	*x = FetchTickerRequest{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[18]
+	mi := &file_pb_message_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1674,7 +2078,7 @@ func (x *FetchTickerRequest) String() string {
 func (*FetchTickerRequest) ProtoMessage() {}
 
 func (x *FetchTickerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[18]
+	mi := &file_pb_message_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1687,7 +2091,7 @@ func (x *FetchTickerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchTickerRequest.ProtoReflect.Descriptor instead.
 func (*FetchTickerRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{18}
+	return file_pb_message_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *FetchTickerRequest) GetExchange() string {
@@ -1721,7 +2125,7 @@ type FetchTickerResponse struct {
 
 func (x *FetchTickerResponse) Reset() {
 	*x = FetchTickerResponse{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[19]
+	mi := &file_pb_message_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1733,7 +2137,7 @@ func (x *FetchTickerResponse) String() string {
 func (*FetchTickerResponse) ProtoMessage() {}
 
 func (x *FetchTickerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[19]
+	mi := &file_pb_message_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1746,7 +2150,7 @@ func (x *FetchTickerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchTickerResponse.ProtoReflect.Descriptor instead.
 func (*FetchTickerResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{19}
+	return file_pb_message_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *FetchTickerResponse) GetTicker() *Ticker {
@@ -1768,7 +2172,7 @@ type FetchTickersRequest struct {
 
 func (x *FetchTickersRequest) Reset() {
 	*x = FetchTickersRequest{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[20]
+	mi := &file_pb_message_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1780,7 +2184,7 @@ func (x *FetchTickersRequest) String() string {
 func (*FetchTickersRequest) ProtoMessage() {}
 
 func (x *FetchTickersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[20]
+	mi := &file_pb_message_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1793,7 +2197,7 @@ func (x *FetchTickersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchTickersRequest.ProtoReflect.Descriptor instead.
 func (*FetchTickersRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{20}
+	return file_pb_message_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *FetchTickersRequest) GetExchange() string {
@@ -1827,7 +2231,7 @@ type FetchTickersResponse struct {
 
 func (x *FetchTickersResponse) Reset() {
 	*x = FetchTickersResponse{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[21]
+	mi := &file_pb_message_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1839,7 +2243,7 @@ func (x *FetchTickersResponse) String() string {
 func (*FetchTickersResponse) ProtoMessage() {}
 
 func (x *FetchTickersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[21]
+	mi := &file_pb_message_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1852,7 +2256,7 @@ func (x *FetchTickersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchTickersResponse.ProtoReflect.Descriptor instead.
 func (*FetchTickersResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{21}
+	return file_pb_message_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *FetchTickersResponse) GetTicker() *Ticker {
@@ -1878,7 +2282,7 @@ type FetchKlinesRequest struct {
 
 func (x *FetchKlinesRequest) Reset() {
 	*x = FetchKlinesRequest{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[22]
+	mi := &file_pb_message_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1890,7 +2294,7 @@ func (x *FetchKlinesRequest) String() string {
 func (*FetchKlinesRequest) ProtoMessage() {}
 
 func (x *FetchKlinesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[22]
+	mi := &file_pb_message_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1903,7 +2307,7 @@ func (x *FetchKlinesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchKlinesRequest.ProtoReflect.Descriptor instead.
 func (*FetchKlinesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{22}
+	return file_pb_message_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *FetchKlinesRequest) GetExchange() string {
@@ -1965,7 +2369,7 @@ type FetchKlinesResponse struct {
 
 func (x *FetchKlinesResponse) Reset() {
 	*x = FetchKlinesResponse{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[23]
+	mi := &file_pb_message_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1977,7 +2381,7 @@ func (x *FetchKlinesResponse) String() string {
 func (*FetchKlinesResponse) ProtoMessage() {}
 
 func (x *FetchKlinesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[23]
+	mi := &file_pb_message_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1990,7 +2394,7 @@ func (x *FetchKlinesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchKlinesResponse.ProtoReflect.Descriptor instead.
 func (*FetchKlinesResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{23}
+	return file_pb_message_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *FetchKlinesResponse) GetKlines() []*Kline {
@@ -2014,7 +2418,7 @@ type FetchTradesRequest struct {
 
 func (x *FetchTradesRequest) Reset() {
 	*x = FetchTradesRequest{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[24]
+	mi := &file_pb_message_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2026,7 +2430,7 @@ func (x *FetchTradesRequest) String() string {
 func (*FetchTradesRequest) ProtoMessage() {}
 
 func (x *FetchTradesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[24]
+	mi := &file_pb_message_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2039,7 +2443,7 @@ func (x *FetchTradesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchTradesRequest.ProtoReflect.Descriptor instead.
 func (*FetchTradesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{24}
+	return file_pb_message_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *FetchTradesRequest) GetExchange() string {
@@ -2087,7 +2491,7 @@ type FetchTradesResponse struct {
 
 func (x *FetchTradesResponse) Reset() {
 	*x = FetchTradesResponse{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[25]
+	mi := &file_pb_message_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2099,7 +2503,7 @@ func (x *FetchTradesResponse) String() string {
 func (*FetchTradesResponse) ProtoMessage() {}
 
 func (x *FetchTradesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[25]
+	mi := &file_pb_message_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2112,7 +2516,7 @@ func (x *FetchTradesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchTradesResponse.ProtoReflect.Descriptor instead.
 func (*FetchTradesResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{25}
+	return file_pb_message_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *FetchTradesResponse) GetTrades() []*Trade {
@@ -2135,7 +2539,7 @@ type FetchOrderBookRequest struct {
 
 func (x *FetchOrderBookRequest) Reset() {
 	*x = FetchOrderBookRequest{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[26]
+	mi := &file_pb_message_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2147,7 +2551,7 @@ func (x *FetchOrderBookRequest) String() string {
 func (*FetchOrderBookRequest) ProtoMessage() {}
 
 func (x *FetchOrderBookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[26]
+	mi := &file_pb_message_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2160,7 +2564,7 @@ func (x *FetchOrderBookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchOrderBookRequest.ProtoReflect.Descriptor instead.
 func (*FetchOrderBookRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{26}
+	return file_pb_message_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *FetchOrderBookRequest) GetExchange() string {
@@ -2201,7 +2605,7 @@ type FetchOrderBookResponse struct {
 
 func (x *FetchOrderBookResponse) Reset() {
 	*x = FetchOrderBookResponse{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[27]
+	mi := &file_pb_message_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2213,7 +2617,7 @@ func (x *FetchOrderBookResponse) String() string {
 func (*FetchOrderBookResponse) ProtoMessage() {}
 
 func (x *FetchOrderBookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[27]
+	mi := &file_pb_message_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2226,7 +2630,7 @@ func (x *FetchOrderBookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchOrderBookResponse.ProtoReflect.Descriptor instead.
 func (*FetchOrderBookResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{27}
+	return file_pb_message_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *FetchOrderBookResponse) GetOrderbook() *OrderBook {
@@ -2247,7 +2651,7 @@ type PriceUpdate struct {
 
 func (x *PriceUpdate) Reset() {
 	*x = PriceUpdate{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[28]
+	mi := &file_pb_message_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2259,7 +2663,7 @@ func (x *PriceUpdate) String() string {
 func (*PriceUpdate) ProtoMessage() {}
 
 func (x *PriceUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[28]
+	mi := &file_pb_message_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2272,7 +2676,7 @@ func (x *PriceUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PriceUpdate.ProtoReflect.Descriptor instead.
 func (*PriceUpdate) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{28}
+	return file_pb_message_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *PriceUpdate) GetTopic() string {
@@ -2300,7 +2704,7 @@ type KlineUpdate struct {
 
 func (x *KlineUpdate) Reset() {
 	*x = KlineUpdate{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[29]
+	mi := &file_pb_message_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2312,7 +2716,7 @@ func (x *KlineUpdate) String() string {
 func (*KlineUpdate) ProtoMessage() {}
 
 func (x *KlineUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[29]
+	mi := &file_pb_message_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2325,7 +2729,7 @@ func (x *KlineUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KlineUpdate.ProtoReflect.Descriptor instead.
 func (*KlineUpdate) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{29}
+	return file_pb_message_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *KlineUpdate) GetTopic() string {
@@ -2353,7 +2757,7 @@ type TradeUpdate struct {
 
 func (x *TradeUpdate) Reset() {
 	*x = TradeUpdate{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[30]
+	mi := &file_pb_message_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2365,7 +2769,7 @@ func (x *TradeUpdate) String() string {
 func (*TradeUpdate) ProtoMessage() {}
 
 func (x *TradeUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[30]
+	mi := &file_pb_message_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2378,7 +2782,7 @@ func (x *TradeUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TradeUpdate.ProtoReflect.Descriptor instead.
 func (*TradeUpdate) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{30}
+	return file_pb_message_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *TradeUpdate) GetTopic() string {
@@ -2406,7 +2810,7 @@ type OrderBookUpdate struct {
 
 func (x *OrderBookUpdate) Reset() {
 	*x = OrderBookUpdate{}
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[31]
+	mi := &file_pb_message_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2418,7 +2822,7 @@ func (x *OrderBookUpdate) String() string {
 func (*OrderBookUpdate) ProtoMessage() {}
 
 func (x *OrderBookUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protocol_pb_message_proto_msgTypes[31]
+	mi := &file_pb_message_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2431,7 +2835,7 @@ func (x *OrderBookUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrderBookUpdate.ProtoReflect.Descriptor instead.
 func (*OrderBookUpdate) Descriptor() ([]byte, []int) {
-	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{31}
+	return file_pb_message_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *OrderBookUpdate) GetTopic() string {
@@ -2448,11 +2852,255 @@ func (x *OrderBookUpdate) GetOrderbook() *OrderBook {
 	return nil
 }
 
-var File_pkg_protocol_pb_message_proto protoreflect.FileDescriptor
+// MiniTickerUpdate 轻量级ticker推送
+type MiniTickerUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Topic         string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`                                   // 订阅topic
+	MiniTicker    *MiniTicker            `protobuf:"bytes,2,opt,name=mini_ticker,json=miniTicker,proto3" json:"mini_ticker,omitempty"`       // 轻量级ticker数据
+	SourceStream  string                 `protobuf:"bytes,3,opt,name=source_stream,json=sourceStream,proto3" json:"source_stream,omitempty"` // 源流名称 (如: @miniTicker)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
 
-const file_pkg_protocol_pb_message_proto_rawDesc = "" +
+func (x *MiniTickerUpdate) Reset() {
+	*x = MiniTickerUpdate{}
+	mi := &file_pb_message_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MiniTickerUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MiniTickerUpdate) ProtoMessage() {}
+
+func (x *MiniTickerUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_message_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MiniTickerUpdate.ProtoReflect.Descriptor instead.
+func (*MiniTickerUpdate) Descriptor() ([]byte, []int) {
+	return file_pb_message_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *MiniTickerUpdate) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *MiniTickerUpdate) GetMiniTicker() *MiniTicker {
+	if x != nil {
+		return x.MiniTicker
+	}
+	return nil
+}
+
+func (x *MiniTickerUpdate) GetSourceStream() string {
+	if x != nil {
+		return x.SourceStream
+	}
+	return ""
+}
+
+// MarkPriceUpdate 标记价格推送
+type MarkPriceUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Topic         string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`                                   // 订阅topic
+	MarkPrice     *MarkPrice             `protobuf:"bytes,2,opt,name=mark_price,json=markPrice,proto3" json:"mark_price,omitempty"`          // 标记价格数据
+	SourceStream  string                 `protobuf:"bytes,3,opt,name=source_stream,json=sourceStream,proto3" json:"source_stream,omitempty"` // 源流名称 (如: @markPrice)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MarkPriceUpdate) Reset() {
+	*x = MarkPriceUpdate{}
+	mi := &file_pb_message_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarkPriceUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarkPriceUpdate) ProtoMessage() {}
+
+func (x *MarkPriceUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_message_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarkPriceUpdate.ProtoReflect.Descriptor instead.
+func (*MarkPriceUpdate) Descriptor() ([]byte, []int) {
+	return file_pb_message_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *MarkPriceUpdate) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *MarkPriceUpdate) GetMarkPrice() *MarkPrice {
+	if x != nil {
+		return x.MarkPrice
+	}
+	return nil
+}
+
+func (x *MarkPriceUpdate) GetSourceStream() string {
+	if x != nil {
+		return x.SourceStream
+	}
+	return ""
+}
+
+// BookTickerUpdate 最优买卖价推送
+type BookTickerUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Topic         string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`                                   // 订阅topic
+	BookTicker    *BookTicker            `protobuf:"bytes,2,opt,name=book_ticker,json=bookTicker,proto3" json:"book_ticker,omitempty"`       // 最优买卖价数据
+	SourceStream  string                 `protobuf:"bytes,3,opt,name=source_stream,json=sourceStream,proto3" json:"source_stream,omitempty"` // 源流名称 (如: @bookTicker)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BookTickerUpdate) Reset() {
+	*x = BookTickerUpdate{}
+	mi := &file_pb_message_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BookTickerUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BookTickerUpdate) ProtoMessage() {}
+
+func (x *BookTickerUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_message_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BookTickerUpdate.ProtoReflect.Descriptor instead.
+func (*BookTickerUpdate) Descriptor() ([]byte, []int) {
+	return file_pb_message_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *BookTickerUpdate) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *BookTickerUpdate) GetBookTicker() *BookTicker {
+	if x != nil {
+		return x.BookTicker
+	}
+	return nil
+}
+
+func (x *BookTickerUpdate) GetSourceStream() string {
+	if x != nil {
+		return x.SourceStream
+	}
+	return ""
+}
+
+// FullTickerUpdate 完整ticker推送 (用于特殊需求)
+type FullTickerUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Topic         string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`                                   // 订阅topic
+	Ticker        *Ticker                `protobuf:"bytes,2,opt,name=ticker,proto3" json:"ticker,omitempty"`                                 // 完整ticker数据
+	SourceStream  string                 `protobuf:"bytes,3,opt,name=source_stream,json=sourceStream,proto3" json:"source_stream,omitempty"` // 源流名称 (如: @ticker)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FullTickerUpdate) Reset() {
+	*x = FullTickerUpdate{}
+	mi := &file_pb_message_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FullTickerUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FullTickerUpdate) ProtoMessage() {}
+
+func (x *FullTickerUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_pb_message_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FullTickerUpdate.ProtoReflect.Descriptor instead.
+func (*FullTickerUpdate) Descriptor() ([]byte, []int) {
+	return file_pb_message_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *FullTickerUpdate) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *FullTickerUpdate) GetTicker() *Ticker {
+	if x != nil {
+		return x.Ticker
+	}
+	return nil
+}
+
+func (x *FullTickerUpdate) GetSourceStream() string {
+	if x != nil {
+		return x.SourceStream
+	}
+	return ""
+}
+
+var File_pb_message_proto protoreflect.FileDescriptor
+
+const file_pb_message_proto_rawDesc = "" +
 	"\n" +
-	"\x1dpkg/protocol/pb/message.proto\x12\x02pb\"\x98\x01\n" +
+	"\x10pb/message.proto\x12\x02pb\"\x98\x01\n" +
 	"\aMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12&\n" +
 	"\x06action\x18\x02 \x01(\x0e2\x0e.pb.ActionTypeR\x06action\x12#\n" +
@@ -2503,21 +3151,38 @@ const file_pkg_protocol_pb_message_proto_rawDesc = "" +
 	"\n" +
 	"LimitRange\x12\x10\n" +
 	"\x03min\x18\x01 \x01(\x01R\x03min\x12\x10\n" +
-	"\x03max\x18\x02 \x01(\x01R\x03max\"\x9d\x02\n" +
+	"\x03max\x18\x02 \x01(\x01R\x03max\"\xaa\x05\n" +
 	"\x06Ticker\x12\x16\n" +
 	"\x06symbol\x18\x01 \x01(\tR\x06symbol\x12\x1c\n" +
 	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12\x12\n" +
 	"\x04last\x18\x03 \x01(\x01R\x04last\x12\x10\n" +
 	"\x03bid\x18\x04 \x01(\x01R\x03bid\x12\x10\n" +
-	"\x03ask\x18\x05 \x01(\x01R\x03ask\x12\x12\n" +
-	"\x04high\x18\x06 \x01(\x01R\x04high\x12\x10\n" +
-	"\x03low\x18\a \x01(\x01R\x03low\x12\x12\n" +
-	"\x04open\x18\b \x01(\x01R\x04open\x12\x14\n" +
-	"\x05close\x18\t \x01(\x01R\x05close\x12\x16\n" +
-	"\x06volume\x18\n" +
-	" \x01(\x01R\x06volume\x12\x16\n" +
-	"\x06change\x18\v \x01(\x01R\x06change\x12%\n" +
-	"\x0echange_percent\x18\f \x01(\x01R\rchangePercent\"\xf6\x01\n" +
+	"\x03ask\x18\x05 \x01(\x01R\x03ask\x12\x1d\n" +
+	"\n" +
+	"bid_volume\x18\x06 \x01(\x01R\tbidVolume\x12\x1d\n" +
+	"\n" +
+	"ask_volume\x18\a \x01(\x01R\taskVolume\x12\x12\n" +
+	"\x04high\x18\b \x01(\x01R\x04high\x12\x10\n" +
+	"\x03low\x18\t \x01(\x01R\x03low\x12\x12\n" +
+	"\x04open\x18\n" +
+	" \x01(\x01R\x04open\x12\x14\n" +
+	"\x05close\x18\v \x01(\x01R\x05close\x12%\n" +
+	"\x0eprevious_close\x18\f \x01(\x01R\rpreviousClose\x12\x16\n" +
+	"\x06volume\x18\r \x01(\x01R\x06volume\x12!\n" +
+	"\fquote_volume\x18\x0e \x01(\x01R\vquoteVolume\x12\x16\n" +
+	"\x06change\x18\x0f \x01(\x01R\x06change\x12%\n" +
+	"\x0echange_percent\x18\x10 \x01(\x01R\rchangePercent\x12\x12\n" +
+	"\x04vwap\x18\x11 \x01(\x01R\x04vwap\x12\x1d\n" +
+	"\n" +
+	"mark_price\x18\x12 \x01(\x01R\tmarkPrice\x12\x1f\n" +
+	"\vindex_price\x18\x13 \x01(\x01R\n" +
+	"indexPrice\x12!\n" +
+	"\ffunding_rate\x18\x14 \x01(\x01R\vfundingRate\x12!\n" +
+	"\ffunding_time\x18\x15 \x01(\x03R\vfundingTime\x124\n" +
+	"\x16estimated_settle_price\x18\x16 \x01(\x01R\x14estimatedSettlePrice\x12\x1f\n" +
+	"\vmarket_type\x18\x17 \x01(\tR\n" +
+	"marketType\x12\x12\n" +
+	"\x04info\x18\x18 \x01(\tR\x04info\"\xf6\x01\n" +
 	"\x05Kline\x12\x16\n" +
 	"\x06symbol\x18\x01 \x01(\tR\x06symbol\x12\x1a\n" +
 	"\bexchange\x18\x02 \x01(\tR\bexchange\x12\x1c\n" +
@@ -2541,7 +3206,35 @@ const file_pkg_protocol_pb_message_proto_rawDesc = "" +
 	"\x05Price\x12\x16\n" +
 	"\x06symbol\x18\x01 \x01(\tR\x06symbol\x12\x14\n" +
 	"\x05price\x18\x02 \x01(\x01R\x05price\x12\x1c\n" +
-	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\"\x89\x01\n" +
+	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\"\xcd\x01\n" +
+	"\n" +
+	"MiniTicker\x12\x16\n" +
+	"\x06symbol\x18\x01 \x01(\tR\x06symbol\x12\x1c\n" +
+	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12\x12\n" +
+	"\x04open\x18\x03 \x01(\x01R\x04open\x12\x12\n" +
+	"\x04high\x18\x04 \x01(\x01R\x04high\x12\x10\n" +
+	"\x03low\x18\x05 \x01(\x01R\x03low\x12\x14\n" +
+	"\x05close\x18\x06 \x01(\x01R\x05close\x12\x16\n" +
+	"\x06volume\x18\a \x01(\x01R\x06volume\x12!\n" +
+	"\fquote_volume\x18\b \x01(\x01R\vquoteVolume\"\xfd\x01\n" +
+	"\tMarkPrice\x12\x16\n" +
+	"\x06symbol\x18\x01 \x01(\tR\x06symbol\x12\x1c\n" +
+	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12\x1d\n" +
+	"\n" +
+	"mark_price\x18\x03 \x01(\x01R\tmarkPrice\x12\x1f\n" +
+	"\vindex_price\x18\x04 \x01(\x01R\n" +
+	"indexPrice\x12!\n" +
+	"\ffunding_rate\x18\x05 \x01(\x01R\vfundingRate\x12!\n" +
+	"\ffunding_time\x18\x06 \x01(\x03R\vfundingTime\x124\n" +
+	"\x16estimated_settle_price\x18\a \x01(\x01R\x14estimatedSettlePrice\"\xc2\x01\n" +
+	"\n" +
+	"BookTicker\x12\x16\n" +
+	"\x06symbol\x18\x01 \x01(\tR\x06symbol\x12\x1c\n" +
+	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12\x1b\n" +
+	"\tbid_price\x18\x03 \x01(\x01R\bbidPrice\x12!\n" +
+	"\fbid_quantity\x18\x04 \x01(\x01R\vbidQuantity\x12\x1b\n" +
+	"\task_price\x18\x05 \x01(\x01R\baskPrice\x12!\n" +
+	"\fask_quantity\x18\x06 \x01(\x01R\vaskQuantity\"\x89\x01\n" +
 	"\tOrderBook\x12\x16\n" +
 	"\x06symbol\x18\x01 \x01(\tR\x06symbol\x12\x1c\n" +
 	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12\"\n" +
@@ -2633,12 +3326,32 @@ const file_pkg_protocol_pb_message_proto_rawDesc = "" +
 	"\x05trade\x18\x02 \x01(\v2\t.pb.TradeR\x05trade\"T\n" +
 	"\x0fOrderBookUpdate\x12\x14\n" +
 	"\x05topic\x18\x01 \x01(\tR\x05topic\x12+\n" +
-	"\torderbook\x18\x02 \x01(\v2\r.pb.OrderBookR\torderbook*E\n" +
+	"\torderbook\x18\x02 \x01(\v2\r.pb.OrderBookR\torderbook\"~\n" +
+	"\x10MiniTickerUpdate\x12\x14\n" +
+	"\x05topic\x18\x01 \x01(\tR\x05topic\x12/\n" +
+	"\vmini_ticker\x18\x02 \x01(\v2\x0e.pb.MiniTickerR\n" +
+	"miniTicker\x12#\n" +
+	"\rsource_stream\x18\x03 \x01(\tR\fsourceStream\"z\n" +
+	"\x0fMarkPriceUpdate\x12\x14\n" +
+	"\x05topic\x18\x01 \x01(\tR\x05topic\x12,\n" +
+	"\n" +
+	"mark_price\x18\x02 \x01(\v2\r.pb.MarkPriceR\tmarkPrice\x12#\n" +
+	"\rsource_stream\x18\x03 \x01(\tR\fsourceStream\"~\n" +
+	"\x10BookTickerUpdate\x12\x14\n" +
+	"\x05topic\x18\x01 \x01(\tR\x05topic\x12/\n" +
+	"\vbook_ticker\x18\x02 \x01(\v2\x0e.pb.BookTickerR\n" +
+	"bookTicker\x12#\n" +
+	"\rsource_stream\x18\x03 \x01(\tR\fsourceStream\"q\n" +
+	"\x10FullTickerUpdate\x12\x14\n" +
+	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\"\n" +
+	"\x06ticker\x18\x02 \x01(\v2\n" +
+	".pb.TickerR\x06ticker\x12#\n" +
+	"\rsource_stream\x18\x03 \x01(\tR\fsourceStream*E\n" +
 	"\vMessageType\x12\v\n" +
 	"\aREQUEST\x10\x00\x12\f\n" +
 	"\bRESPONSE\x10\x01\x12\x10\n" +
 	"\fNOTIFICATION\x10\x02\x12\t\n" +
-	"\x05ERROR\x10\x03*\xfc\x01\n" +
+	"\x05ERROR\x10\x03*\xdb\x02\n" +
 	"\n" +
 	"ActionType\x12\r\n" +
 	"\tSUBSCRIBE\x10\x00\x12\x0f\n" +
@@ -2651,31 +3364,40 @@ const file_pkg_protocol_pb_message_proto_rawDesc = "" +
 	"\fFETCH_TRADES\x10\x0e\x12\x13\n" +
 	"\x0fFETCH_ORDERBOOK\x10\x0f\x12\x11\n" +
 	"\rMARKET_UPDATE\x10\x14\x12\x10\n" +
-	"\fPRICE_UPDATE\x10\x15\x12\x10\n" +
-	"\fKLINE_UPDATE\x10\x16\x12\x10\n" +
-	"\fTRADE_UPDATE\x10\x17\x12\x14\n" +
-	"\x10ORDERBOOK_UPDATE\x10\x18*:\n" +
+	"\fPRICE_UPDATE\x10\x15\x12\x16\n" +
+	"\x12MINI_TICKER_UPDATE\x10\x16\x12\x15\n" +
+	"\x11MARK_PRICE_UPDATE\x10\x17\x12\x16\n" +
+	"\x12BOOK_TICKER_UPDATE\x10\x18\x12\x16\n" +
+	"\x12FULL_TICKER_UPDATE\x10\x19\x12\x10\n" +
+	"\fKLINE_UPDATE\x10\x1a\x12\x10\n" +
+	"\fTRADE_UPDATE\x10\x1b\x12\x14\n" +
+	"\x10ORDERBOOK_UPDATE\x10\x1c*}\n" +
 	"\bDataType\x12\t\n" +
-	"\x05PRICE\x10\x00\x12\t\n" +
-	"\x05KLINE\x10\x01\x12\t\n" +
-	"\x05TRADE\x10\x02\x12\r\n" +
-	"\tORDERBOOK\x10\x03B1Z/github.com/riven-blade/datahive/pkg/protocol/pbb\x06proto3"
+	"\x05PRICE\x10\x00\x12\x0f\n" +
+	"\vMINI_TICKER\x10\x01\x12\x0e\n" +
+	"\n" +
+	"MARK_PRICE\x10\x02\x12\x0f\n" +
+	"\vBOOK_TICKER\x10\x03\x12\x0f\n" +
+	"\vFULL_TICKER\x10\x04\x12\t\n" +
+	"\x05KLINE\x10\x05\x12\t\n" +
+	"\x05TRADE\x10\x06\x12\r\n" +
+	"\tORDERBOOK\x10\aB1Z/github.com/riven-blade/datahive/pkg/protocol/pbb\x06proto3"
 
 var (
-	file_pkg_protocol_pb_message_proto_rawDescOnce sync.Once
-	file_pkg_protocol_pb_message_proto_rawDescData []byte
+	file_pb_message_proto_rawDescOnce sync.Once
+	file_pb_message_proto_rawDescData []byte
 )
 
-func file_pkg_protocol_pb_message_proto_rawDescGZIP() []byte {
-	file_pkg_protocol_pb_message_proto_rawDescOnce.Do(func() {
-		file_pkg_protocol_pb_message_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_pkg_protocol_pb_message_proto_rawDesc), len(file_pkg_protocol_pb_message_proto_rawDesc)))
+func file_pb_message_proto_rawDescGZIP() []byte {
+	file_pb_message_proto_rawDescOnce.Do(func() {
+		file_pb_message_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_pb_message_proto_rawDesc), len(file_pb_message_proto_rawDesc)))
 	})
-	return file_pkg_protocol_pb_message_proto_rawDescData
+	return file_pb_message_proto_rawDescData
 }
 
-var file_pkg_protocol_pb_message_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_pkg_protocol_pb_message_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
-var file_pkg_protocol_pb_message_proto_goTypes = []any{
+var file_pb_message_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_pb_message_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
+var file_pb_message_proto_goTypes = []any{
 	(MessageType)(0),               // 0: pb.MessageType
 	(ActionType)(0),                // 1: pb.ActionType
 	(DataType)(0),                  // 2: pb.DataType
@@ -2689,30 +3411,37 @@ var file_pkg_protocol_pb_message_proto_goTypes = []any{
 	(*Kline)(nil),                  // 10: pb.Kline
 	(*Trade)(nil),                  // 11: pb.Trade
 	(*Price)(nil),                  // 12: pb.Price
-	(*OrderBook)(nil),              // 13: pb.OrderBook
-	(*PriceLevel)(nil),             // 14: pb.PriceLevel
-	(*SubscribeRequest)(nil),       // 15: pb.SubscribeRequest
-	(*SubscribeResponse)(nil),      // 16: pb.SubscribeResponse
-	(*UnsubscribeRequest)(nil),     // 17: pb.UnsubscribeRequest
-	(*UnsubscribeResponse)(nil),    // 18: pb.UnsubscribeResponse
-	(*FetchMarketsRequest)(nil),    // 19: pb.FetchMarketsRequest
-	(*FetchMarketsResponse)(nil),   // 20: pb.FetchMarketsResponse
-	(*FetchTickerRequest)(nil),     // 21: pb.FetchTickerRequest
-	(*FetchTickerResponse)(nil),    // 22: pb.FetchTickerResponse
-	(*FetchTickersRequest)(nil),    // 23: pb.FetchTickersRequest
-	(*FetchTickersResponse)(nil),   // 24: pb.FetchTickersResponse
-	(*FetchKlinesRequest)(nil),     // 25: pb.FetchKlinesRequest
-	(*FetchKlinesResponse)(nil),    // 26: pb.FetchKlinesResponse
-	(*FetchTradesRequest)(nil),     // 27: pb.FetchTradesRequest
-	(*FetchTradesResponse)(nil),    // 28: pb.FetchTradesResponse
-	(*FetchOrderBookRequest)(nil),  // 29: pb.FetchOrderBookRequest
-	(*FetchOrderBookResponse)(nil), // 30: pb.FetchOrderBookResponse
-	(*PriceUpdate)(nil),            // 31: pb.PriceUpdate
-	(*KlineUpdate)(nil),            // 32: pb.KlineUpdate
-	(*TradeUpdate)(nil),            // 33: pb.TradeUpdate
-	(*OrderBookUpdate)(nil),        // 34: pb.OrderBookUpdate
+	(*MiniTicker)(nil),             // 13: pb.MiniTicker
+	(*MarkPrice)(nil),              // 14: pb.MarkPrice
+	(*BookTicker)(nil),             // 15: pb.BookTicker
+	(*OrderBook)(nil),              // 16: pb.OrderBook
+	(*PriceLevel)(nil),             // 17: pb.PriceLevel
+	(*SubscribeRequest)(nil),       // 18: pb.SubscribeRequest
+	(*SubscribeResponse)(nil),      // 19: pb.SubscribeResponse
+	(*UnsubscribeRequest)(nil),     // 20: pb.UnsubscribeRequest
+	(*UnsubscribeResponse)(nil),    // 21: pb.UnsubscribeResponse
+	(*FetchMarketsRequest)(nil),    // 22: pb.FetchMarketsRequest
+	(*FetchMarketsResponse)(nil),   // 23: pb.FetchMarketsResponse
+	(*FetchTickerRequest)(nil),     // 24: pb.FetchTickerRequest
+	(*FetchTickerResponse)(nil),    // 25: pb.FetchTickerResponse
+	(*FetchTickersRequest)(nil),    // 26: pb.FetchTickersRequest
+	(*FetchTickersResponse)(nil),   // 27: pb.FetchTickersResponse
+	(*FetchKlinesRequest)(nil),     // 28: pb.FetchKlinesRequest
+	(*FetchKlinesResponse)(nil),    // 29: pb.FetchKlinesResponse
+	(*FetchTradesRequest)(nil),     // 30: pb.FetchTradesRequest
+	(*FetchTradesResponse)(nil),    // 31: pb.FetchTradesResponse
+	(*FetchOrderBookRequest)(nil),  // 32: pb.FetchOrderBookRequest
+	(*FetchOrderBookResponse)(nil), // 33: pb.FetchOrderBookResponse
+	(*PriceUpdate)(nil),            // 34: pb.PriceUpdate
+	(*KlineUpdate)(nil),            // 35: pb.KlineUpdate
+	(*TradeUpdate)(nil),            // 36: pb.TradeUpdate
+	(*OrderBookUpdate)(nil),        // 37: pb.OrderBookUpdate
+	(*MiniTickerUpdate)(nil),       // 38: pb.MiniTickerUpdate
+	(*MarkPriceUpdate)(nil),        // 39: pb.MarkPriceUpdate
+	(*BookTickerUpdate)(nil),       // 40: pb.BookTickerUpdate
+	(*FullTickerUpdate)(nil),       // 41: pb.FullTickerUpdate
 }
-var file_pkg_protocol_pb_message_proto_depIdxs = []int32{
+var file_pb_message_proto_depIdxs = []int32{
 	1,  // 0: pb.Message.action:type_name -> pb.ActionType
 	0,  // 1: pb.Message.type:type_name -> pb.MessageType
 	6,  // 2: pb.Market.precision:type_name -> pb.MarketPrecision
@@ -2721,47 +3450,51 @@ var file_pkg_protocol_pb_message_proto_depIdxs = []int32{
 	8,  // 5: pb.MarketLimits.amount:type_name -> pb.LimitRange
 	8,  // 6: pb.MarketLimits.price:type_name -> pb.LimitRange
 	8,  // 7: pb.MarketLimits.cost:type_name -> pb.LimitRange
-	14, // 8: pb.OrderBook.bids:type_name -> pb.PriceLevel
-	14, // 9: pb.OrderBook.asks:type_name -> pb.PriceLevel
+	17, // 8: pb.OrderBook.bids:type_name -> pb.PriceLevel
+	17, // 9: pb.OrderBook.asks:type_name -> pb.PriceLevel
 	2,  // 10: pb.SubscribeRequest.data_type:type_name -> pb.DataType
 	5,  // 11: pb.FetchMarketsResponse.markets:type_name -> pb.Market
 	9,  // 12: pb.FetchTickerResponse.ticker:type_name -> pb.Ticker
 	9,  // 13: pb.FetchTickersResponse.ticker:type_name -> pb.Ticker
 	10, // 14: pb.FetchKlinesResponse.klines:type_name -> pb.Kline
 	11, // 15: pb.FetchTradesResponse.trades:type_name -> pb.Trade
-	13, // 16: pb.FetchOrderBookResponse.orderbook:type_name -> pb.OrderBook
+	16, // 16: pb.FetchOrderBookResponse.orderbook:type_name -> pb.OrderBook
 	12, // 17: pb.PriceUpdate.price:type_name -> pb.Price
 	10, // 18: pb.KlineUpdate.kline:type_name -> pb.Kline
 	11, // 19: pb.TradeUpdate.trade:type_name -> pb.Trade
-	13, // 20: pb.OrderBookUpdate.orderbook:type_name -> pb.OrderBook
-	21, // [21:21] is the sub-list for method output_type
-	21, // [21:21] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	16, // 20: pb.OrderBookUpdate.orderbook:type_name -> pb.OrderBook
+	13, // 21: pb.MiniTickerUpdate.mini_ticker:type_name -> pb.MiniTicker
+	14, // 22: pb.MarkPriceUpdate.mark_price:type_name -> pb.MarkPrice
+	15, // 23: pb.BookTickerUpdate.book_ticker:type_name -> pb.BookTicker
+	9,  // 24: pb.FullTickerUpdate.ticker:type_name -> pb.Ticker
+	25, // [25:25] is the sub-list for method output_type
+	25, // [25:25] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
-func init() { file_pkg_protocol_pb_message_proto_init() }
-func file_pkg_protocol_pb_message_proto_init() {
-	if File_pkg_protocol_pb_message_proto != nil {
+func init() { file_pb_message_proto_init() }
+func file_pb_message_proto_init() {
+	if File_pb_message_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_protocol_pb_message_proto_rawDesc), len(file_pkg_protocol_pb_message_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pb_message_proto_rawDesc), len(file_pb_message_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   32,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_pkg_protocol_pb_message_proto_goTypes,
-		DependencyIndexes: file_pkg_protocol_pb_message_proto_depIdxs,
-		EnumInfos:         file_pkg_protocol_pb_message_proto_enumTypes,
-		MessageInfos:      file_pkg_protocol_pb_message_proto_msgTypes,
+		GoTypes:           file_pb_message_proto_goTypes,
+		DependencyIndexes: file_pb_message_proto_depIdxs,
+		EnumInfos:         file_pb_message_proto_enumTypes,
+		MessageInfos:      file_pb_message_proto_msgTypes,
 	}.Build()
-	File_pkg_protocol_pb_message_proto = out.File
-	file_pkg_protocol_pb_message_proto_goTypes = nil
-	file_pkg_protocol_pb_message_proto_depIdxs = nil
+	File_pb_message_proto = out.File
+	file_pb_message_proto_goTypes = nil
+	file_pb_message_proto_depIdxs = nil
 }

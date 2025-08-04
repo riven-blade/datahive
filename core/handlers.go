@@ -475,6 +475,14 @@ func convertDataTypeToEventType(dataType pb.DataType) (EventType, error) {
 	switch dataType {
 	case pb.DataType_PRICE:
 		return EventPrice, nil
+	case pb.DataType_MINI_TICKER:
+		return EventMiniTicker, nil
+	case pb.DataType_MARK_PRICE:
+		return EventMarkPrice, nil
+	case pb.DataType_BOOK_TICKER:
+		return EventBookTicker, nil
+	case pb.DataType_FULL_TICKER:
+		return EventTicker, nil
 	case pb.DataType_KLINE:
 		return EventKline, nil
 	case pb.DataType_TRADE:

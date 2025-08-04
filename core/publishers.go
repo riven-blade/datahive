@@ -33,6 +33,18 @@ func (p *EventPublisher) Publish(ctx context.Context, event Event) error {
 	case EventPrice:
 		action = pb.ActionType_PRICE_UPDATE
 		data, err = p.serializePriceUpdate(event)
+	case EventMiniTicker:
+		action = pb.ActionType_MINI_TICKER_UPDATE
+		data, err = p.serializeMiniTickerUpdate(event)
+	case EventMarkPrice:
+		action = pb.ActionType_MARK_PRICE_UPDATE
+		data, err = p.serializeMarkPriceUpdate(event)
+	case EventBookTicker:
+		action = pb.ActionType_BOOK_TICKER_UPDATE
+		data, err = p.serializeBookTickerUpdate(event)
+	case EventTicker:
+		action = pb.ActionType_FULL_TICKER_UPDATE
+		data, err = p.serializeFullTickerUpdate(event)
 	case EventKline:
 		action = pb.ActionType_KLINE_UPDATE
 		data, err = p.serializeKlineUpdate(event)
@@ -220,4 +232,124 @@ func getBoolFromData(data map[string]interface{}, key string) bool {
 		}
 	}
 	return false
+}
+
+// =====================================================================================
+// 新增的序列化方法 - 支持增强协议
+// =====================================================================================
+
+// serializeMiniTickerUpdate 序列化轻量级ticker更新事件
+func (p *EventPublisher) serializeMiniTickerUpdate(event Event) ([]byte, error) {
+	tickerData, ok := event.Data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid mini ticker data type, expected map[string]interface{}")
+	}
+
+	miniTicker := &pb.MiniTicker{
+		Symbol:      getStringFromData(tickerData, "symbol"),
+		Timestamp:   getInt64FromData(tickerData, "timestamp"),
+		Open:        getFloat64FromData(tickerData, "open"),
+		High:        getFloat64FromData(tickerData, "high"),
+		Low:         getFloat64FromData(tickerData, "low"),
+		Close:       getFloat64FromData(tickerData, "close"),
+		Volume:      getFloat64FromData(tickerData, "volume"),
+		QuoteVolume: getFloat64FromData(tickerData, "quote_volume"),
+	}
+
+	miniTickerUpdate := &pb.MiniTickerUpdate{
+		Topic:        event.Topic,
+		MiniTicker:   miniTicker,
+		SourceStream: getStringFromData(tickerData, "stream_name"),
+	}
+
+	return proto.Marshal(miniTickerUpdate)
+}
+
+// serializeMarkPriceUpdate 序列化标记价格更新事件
+func (p *EventPublisher) serializeMarkPriceUpdate(event Event) ([]byte, error) {
+	markPriceData, ok := event.Data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid mark price data type, expected map[string]interface{}")
+	}
+
+	markPrice := &pb.MarkPrice{
+		Symbol:               getStringFromData(markPriceData, "symbol"),
+		Timestamp:            getInt64FromData(markPriceData, "timestamp"),
+		MarkPrice:            getFloat64FromData(markPriceData, "mark_price"),
+		IndexPrice:           getFloat64FromData(markPriceData, "index_price"),
+		EstimatedSettlePrice: getFloat64FromData(markPriceData, "estimated_settle_price"),
+		FundingRate:          getFloat64FromData(markPriceData, "funding_rate"),
+		FundingTime:          getInt64FromData(markPriceData, "funding_time"),
+	}
+
+	markPriceUpdate := &pb.MarkPriceUpdate{
+		Topic:        event.Topic,
+		MarkPrice:    markPrice,
+		SourceStream: getStringFromData(markPriceData, "stream_name"),
+	}
+
+	return proto.Marshal(markPriceUpdate)
+}
+
+// serializeBookTickerUpdate 序列化最优买卖价更新事件
+func (p *EventPublisher) serializeBookTickerUpdate(event Event) ([]byte, error) {
+	bookTickerData, ok := event.Data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid book ticker data type, expected map[string]interface{}")
+	}
+
+	bookTicker := &pb.BookTicker{
+		Symbol:      getStringFromData(bookTickerData, "symbol"),
+		Timestamp:   getInt64FromData(bookTickerData, "timestamp"),
+		BidPrice:    getFloat64FromData(bookTickerData, "bid_price"),
+		BidQuantity: getFloat64FromData(bookTickerData, "bid_quantity"),
+		AskPrice:    getFloat64FromData(bookTickerData, "ask_price"),
+		AskQuantity: getFloat64FromData(bookTickerData, "ask_quantity"),
+	}
+
+	bookTickerUpdate := &pb.BookTickerUpdate{
+		Topic:        event.Topic,
+		BookTicker:   bookTicker,
+		SourceStream: getStringFromData(bookTickerData, "stream_name"),
+	}
+
+	return proto.Marshal(bookTickerUpdate)
+}
+
+// serializeFullTickerUpdate 序列化完整ticker更新事件
+func (p *EventPublisher) serializeFullTickerUpdate(event Event) ([]byte, error) {
+	tickerData, ok := event.Data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid full ticker data type, expected map[string]interface{}")
+	}
+
+	ticker := &pb.Ticker{
+		Symbol:        getStringFromData(tickerData, "symbol"),
+		Timestamp:     getInt64FromData(tickerData, "timestamp"),
+		Last:          getFloat64FromData(tickerData, "last"),
+		Bid:           getFloat64FromData(tickerData, "bid"),
+		Ask:           getFloat64FromData(tickerData, "ask"),
+		BidVolume:     getFloat64FromData(tickerData, "bid_volume"),
+		AskVolume:     getFloat64FromData(tickerData, "ask_volume"),
+		High:          getFloat64FromData(tickerData, "high"),
+		Low:           getFloat64FromData(tickerData, "low"),
+		Open:          getFloat64FromData(tickerData, "open"),
+		Close:         getFloat64FromData(tickerData, "close"),
+		Volume:        getFloat64FromData(tickerData, "volume"),
+		QuoteVolume:   getFloat64FromData(tickerData, "quote_volume"),
+		Change:        getFloat64FromData(tickerData, "change"),
+		ChangePercent: getFloat64FromData(tickerData, "change_percent"),
+		Vwap:          getFloat64FromData(tickerData, "vwap"),
+		MarkPrice:     getFloat64FromData(tickerData, "mark_price"),
+		IndexPrice:    getFloat64FromData(tickerData, "index_price"),
+		FundingRate:   getFloat64FromData(tickerData, "funding_rate"),
+		FundingTime:   getInt64FromData(tickerData, "funding_time"),
+	}
+
+	tickerUpdate := &pb.FullTickerUpdate{
+		Topic:  event.Topic,
+		Ticker: ticker,
+	}
+
+	return proto.Marshal(tickerUpdate)
 }

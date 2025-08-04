@@ -40,12 +40,15 @@ type StreamSubscribers struct {
 	timeframe  string // for kline only
 
 	// 订阅者channels
-	tickerSubs  []chan *ccxt.WatchPrice
-	depthSubs   []chan *ccxt.WatchOrderBook
-	tradeSubs   []chan *ccxt.WatchTrade
-	klineSubs   []chan *ccxt.WatchOHLCV
-	balanceSubs []chan *ccxt.WatchBalance
-	orderSubs   []chan *ccxt.WatchOrder
+	tickerSubs     []chan *ccxt.WatchPrice
+	miniTickerSubs []chan *ccxt.WatchMiniTicker
+	markPriceSubs  []chan *ccxt.WatchMarkPrice
+	bookTickerSubs []chan *ccxt.WatchBookTicker
+	depthSubs      []chan *ccxt.WatchOrderBook
+	tradeSubs      []chan *ccxt.WatchTrade
+	klineSubs      []chan *ccxt.WatchOHLCV
+	balanceSubs    []chan *ccxt.WatchBalance
+	orderSubs      []chan *ccxt.WatchOrder
 
 	// 订阅者ID映射
 	subscriptionMap map[string]interface{} // subscriptionID -> channel
@@ -245,6 +248,12 @@ func (sm *StreamManager) processStreamMessage(rawMessage []byte, subscribers *St
 	switch subscribers.dataType {
 	case "ticker":
 		return sm.processTicker(data, subscribers)
+	case "miniTicker":
+		return sm.processMiniTicker(data, subscribers)
+	case "markPrice":
+		return sm.processMarkPrice(data, subscribers)
+	case "bookTicker":
+		return sm.processBookTicker(data, subscribers)
 	case "depth":
 		return sm.processDepth(data, subscribers)
 	case "trade":
@@ -271,6 +280,24 @@ func (ss *StreamSubscribers) Subscribe(dataType string) (string, interface{}, er
 	case "ticker":
 		userChan := make(chan *ccxt.WatchPrice, 1000)
 		ss.tickerSubs = append(ss.tickerSubs, userChan)
+		ss.subscriptionMap[subscriptionID] = userChan
+		return subscriptionID, userChan, nil
+
+	case "miniTicker":
+		userChan := make(chan *ccxt.WatchMiniTicker, 1000)
+		ss.miniTickerSubs = append(ss.miniTickerSubs, userChan)
+		ss.subscriptionMap[subscriptionID] = userChan
+		return subscriptionID, userChan, nil
+
+	case "markPrice":
+		userChan := make(chan *ccxt.WatchMarkPrice, 1000)
+		ss.markPriceSubs = append(ss.markPriceSubs, userChan)
+		ss.subscriptionMap[subscriptionID] = userChan
+		return subscriptionID, userChan, nil
+
+	case "bookTicker":
+		userChan := make(chan *ccxt.WatchBookTicker, 1000)
+		ss.bookTickerSubs = append(ss.bookTickerSubs, userChan)
 		ss.subscriptionMap[subscriptionID] = userChan
 		return subscriptionID, userChan, nil
 
@@ -365,6 +392,111 @@ func (sm *StreamManager) processTicker(data map[string]interface{}, subscribers 
 	for _, ch := range tickerSubs {
 		select {
 		case ch <- ticker:
+		default:
+			// channel满了就跳过
+		}
+	}
+
+	return nil
+}
+
+// processMiniTicker 处理轻量级ticker数据
+func (sm *StreamManager) processMiniTicker(data map[string]interface{}, subscribers *StreamSubscribers) error {
+	logger.Debug("Processing mini ticker data",
+		zap.String("stream", subscribers.streamName),
+		zap.Int("subscribers", len(subscribers.miniTickerSubs)))
+
+	timestamp := utils.SafeGetInt64WithDefault(data, "E", time.Now().UnixMilli())
+
+	miniTicker := &ccxt.WatchMiniTicker{
+		Symbol:      subscribers.symbol,
+		TimeStamp:   timestamp,
+		Open:        utils.SafeGetFloatWithDefault(data, "o", 0),
+		High:        utils.SafeGetFloatWithDefault(data, "h", 0),
+		Low:         utils.SafeGetFloatWithDefault(data, "l", 0),
+		Close:       utils.SafeGetFloatWithDefault(data, "c", 0),
+		Volume:      utils.SafeGetFloatWithDefault(data, "v", 0),
+		QuoteVolume: utils.SafeGetFloatWithDefault(data, "q", 0),
+		StreamName:  subscribers.streamName,
+	}
+
+	// 分发给所有订阅者
+	subscribers.mu.RLock()
+	miniTickerSubs := subscribers.miniTickerSubs
+	subscribers.mu.RUnlock()
+
+	for _, ch := range miniTickerSubs {
+		select {
+		case ch <- miniTicker:
+		default:
+			// channel满了就跳过
+		}
+	}
+
+	return nil
+}
+
+// processMarkPrice 处理标记价格数据(仅期货)
+func (sm *StreamManager) processMarkPrice(data map[string]interface{}, subscribers *StreamSubscribers) error {
+	logger.Debug("Processing mark price data",
+		zap.String("stream", subscribers.streamName),
+		zap.Int("subscribers", len(subscribers.markPriceSubs)))
+
+	timestamp := utils.SafeGetInt64WithDefault(data, "E", time.Now().UnixMilli())
+
+	markPrice := &ccxt.WatchMarkPrice{
+		Symbol:               subscribers.symbol,
+		TimeStamp:            timestamp,
+		MarkPrice:            utils.SafeGetFloatWithDefault(data, "m", 0),
+		IndexPrice:           utils.SafeGetFloatWithDefault(data, "i", 0),
+		FundingRate:          utils.SafeGetFloatWithDefault(data, "r", 0),
+		FundingTime:          utils.SafeGetInt64WithDefault(data, "T", 0),
+		EstimatedSettlePrice: utils.SafeGetFloatWithDefault(data, "P", 0),
+		StreamName:           subscribers.streamName,
+	}
+
+	// 分发给所有订阅者
+	subscribers.mu.RLock()
+	markPriceSubs := subscribers.markPriceSubs
+	subscribers.mu.RUnlock()
+
+	for _, ch := range markPriceSubs {
+		select {
+		case ch <- markPrice:
+		default:
+			// channel满了就跳过
+		}
+	}
+
+	return nil
+}
+
+// processBookTicker 处理最优买卖价数据
+func (sm *StreamManager) processBookTicker(data map[string]interface{}, subscribers *StreamSubscribers) error {
+	logger.Debug("Processing book ticker data",
+		zap.String("stream", subscribers.streamName),
+		zap.Int("subscribers", len(subscribers.bookTickerSubs)))
+
+	timestamp := utils.SafeGetInt64WithDefault(data, "u", time.Now().UnixMilli())
+
+	bookTicker := &ccxt.WatchBookTicker{
+		Symbol:      subscribers.symbol,
+		TimeStamp:   timestamp,
+		BidPrice:    utils.SafeGetFloatWithDefault(data, "b", 0),
+		BidQuantity: utils.SafeGetFloatWithDefault(data, "B", 0),
+		AskPrice:    utils.SafeGetFloatWithDefault(data, "a", 0),
+		AskQuantity: utils.SafeGetFloatWithDefault(data, "A", 0),
+		StreamName:  subscribers.streamName,
+	}
+
+	// 分发给所有订阅者
+	subscribers.mu.RLock()
+	bookTickerSubs := subscribers.bookTickerSubs
+	subscribers.mu.RUnlock()
+
+	for _, ch := range bookTickerSubs {
+		select {
+		case ch <- bookTicker:
 		default:
 			// channel满了就跳过
 		}

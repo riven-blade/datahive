@@ -349,6 +349,42 @@ type WatchTicker struct {
 	StreamName string `json:"stream_name"` // 频道信息
 }
 
+// WatchMiniTicker WebSocket 轻量级Ticker 数据
+type WatchMiniTicker struct {
+	Symbol      string  `json:"symbol"`       // 交易对符号
+	TimeStamp   int64   `json:"timestamp"`    // 时间戳
+	Open        float64 `json:"open"`         // 开盘价
+	High        float64 `json:"high"`         // 最高价
+	Low         float64 `json:"low"`          // 最低价
+	Close       float64 `json:"close"`        // 收盘价(最新价)
+	Volume      float64 `json:"volume"`       // 成交量
+	QuoteVolume float64 `json:"quote_volume"` // 计价资产成交量
+	StreamName  string  `json:"stream_name"`  // 频道信息
+}
+
+// WatchMarkPrice WebSocket 标记价格数据 (仅期货)
+type WatchMarkPrice struct {
+	Symbol               string  `json:"symbol"`                 // 交易对符号
+	TimeStamp            int64   `json:"timestamp"`              // 时间戳
+	MarkPrice            float64 `json:"mark_price"`             // 标记价格
+	IndexPrice           float64 `json:"index_price"`            // 指数价格
+	FundingRate          float64 `json:"funding_rate"`           // 资金费率
+	FundingTime          int64   `json:"funding_time"`           // 下次资金费用时间
+	EstimatedSettlePrice float64 `json:"estimated_settle_price"` // 预估结算价
+	StreamName           string  `json:"stream_name"`            // 频道信息
+}
+
+// WatchBookTicker WebSocket 最优买卖价数据
+type WatchBookTicker struct {
+	Symbol      string  `json:"symbol"`       // 交易对符号
+	TimeStamp   int64   `json:"timestamp"`    // 时间戳
+	BidPrice    float64 `json:"bid_price"`    // 最优买价
+	BidQuantity float64 `json:"bid_quantity"` // 买量
+	AskPrice    float64 `json:"ask_price"`    // 最优卖价
+	AskQuantity float64 `json:"ask_quantity"` // 卖量
+	StreamName  string  `json:"stream_name"`  // 频道信息
+}
+
 // WatchOrderBook WebSocket 订单簿数据
 type WatchOrderBook struct {
 	OrderBook

@@ -33,18 +33,22 @@ enum ActionType {
   
   // 数据获取
   FETCH_MARKETS = 10;
-  FETCH_TICKER = 11;
+  FETCH_TICKER = 11;        // 返回完整ticker数据
   FETCH_TICKERS = 12;
   FETCH_KLINES = 13;
   FETCH_TRADES = 14;
   FETCH_ORDERBOOK = 15;
   
-  // 数据推送
+  // 数据推送 - 增强版本
   MARKET_UPDATE = 20;
-  PRICE_UPDATE = 21;       // 轻量级价格更新
-  KLINE_UPDATE = 22;
-  TRADE_UPDATE = 23;
-  ORDERBOOK_UPDATE = 24;
+  PRICE_UPDATE = 21;         // 通用价格更新
+  MINI_TICKER_UPDATE = 22;   // 轻量级ticker更新  
+  MARK_PRICE_UPDATE = 23;    // 标记价格更新(期货专用)
+  BOOK_TICKER_UPDATE = 24;   // 最优买卖价更新
+  FULL_TICKER_UPDATE = 25;   // 完整ticker更新
+  KLINE_UPDATE = 26;
+  TRADE_UPDATE = 27;
+  ORDERBOOK_UPDATE = 28;
 }
 
 // Error 错误信息
@@ -119,20 +123,42 @@ message LimitRange {
   double max = 2;             // 最大值
 }
 
-// Ticker 行情数据
+// Ticker 行情数据 - 增强版本
 message Ticker {
-  string symbol = 1;          // 交易对符号
-  int64 timestamp = 2;        // 时间戳
-  double last = 3;            // 最新价
-  double bid = 4;             // 买一价
-  double ask = 5;             // 卖一价
-  double high = 6;            // 24h最高价
-  double low = 7;             // 24h最低价
-  double open = 8;            // 开盘价
-  double close = 9;           // 收盘价
-  double volume = 10;         // 24h成交量
-  double change = 11;         // 价格变化
-  double change_percent = 12; // 变化百分比
+  string symbol = 1;              // 交易对符号
+  int64 timestamp = 2;            // 时间戳
+  
+  // 基础价格信息
+  double last = 3;                // 最新成交价
+  double bid = 4;                 // 买一价
+  double ask = 5;                 // 卖一价
+  double bid_volume = 6;          // 买一量
+  double ask_volume = 7;          // 卖一量
+  
+  // 24小时统计
+  double high = 8;                // 24h最高价
+  double low = 9;                 // 24h最低价
+  double open = 10;               // 开盘价
+  double close = 11;              // 收盘价
+  double previous_close = 12;     // 前收盘价
+  double volume = 13;             // 24h成交量(基础资产)
+  double quote_volume = 14;       // 24h成交量(计价资产)
+  double change = 15;             // 价格变化
+  double change_percent = 16;     // 变化百分比
+  double vwap = 17;               // 成交量加权平均价
+  
+  // 期货特有字段
+  double mark_price = 18;         // 标记价格
+  double index_price = 19;        // 指数价格  
+  double funding_rate = 20;       // 资金费率
+  int64 funding_time = 21;        // 下次资金费用时间
+  double estimated_settle_price = 22; // 预估结算价
+  
+  // 市场类型标识
+  string market_type = 23;        // spot, futures, swap
+  
+  // 原始数据
+  string info = 24;               // JSON格式的原始数据
 }
 
 // Kline K线数据
@@ -167,6 +193,39 @@ message Price {
   int64 timestamp = 3;        // 时间戳
 }
 
+// MiniTicker 轻量级ticker数据
+message MiniTicker {
+  string symbol = 1;              // 交易对符号
+  int64 timestamp = 2;            // 时间戳
+  double open = 3;                // 开盘价
+  double high = 4;                // 最高价
+  double low = 5;                 // 最低价
+  double close = 6;               // 收盘价(最新价)
+  double volume = 7;              // 成交量
+  double quote_volume = 8;        // 计价资产成交量
+}
+
+// MarkPrice 标记价格数据(仅期货)
+message MarkPrice {
+  string symbol = 1;              // 交易对符号
+  int64 timestamp = 2;            // 时间戳
+  double mark_price = 3;          // 标记价格
+  double index_price = 4;         // 指数价格
+  double funding_rate = 5;        // 资金费率
+  int64 funding_time = 6;         // 下次资金费用时间
+  double estimated_settle_price = 7; // 预估结算价
+}
+
+// BookTicker 最优买卖价
+message BookTicker {
+  string symbol = 1;              // 交易对符号
+  int64 timestamp = 2;            // 时间戳
+  double bid_price = 3;           // 最优买价
+  double bid_quantity = 4;        // 买量
+  double ask_price = 5;           // 最优卖价
+  double ask_quantity = 6;        // 卖量
+}
+
 // OrderBook 订单簿
 message OrderBook {
   string symbol = 1;          // 交易对符号
@@ -191,10 +250,14 @@ message PriceLevel {
 
 // DataType 数据类型枚举
 enum DataType {
-  PRICE = 0;       // 轻量级价格数据
-  KLINE = 1;       // K线数据
-  TRADE = 2;       // 交易数据
-  ORDERBOOK = 3;   // 订单簿数据
+  PRICE = 0;              // 通用价格数据
+  MINI_TICKER = 1;        // 轻量级ticker
+  MARK_PRICE = 2;         // 标记价格(仅期货)
+  BOOK_TICKER = 3;        // 最优买卖价
+  FULL_TICKER = 4;        // 完整ticker
+  KLINE = 5;              // K线数据
+  TRADE = 6;              // 交易数据
+  ORDERBOOK = 7;          // 订单簿数据
 }
 
 // SubscribeRequest 订阅请求
@@ -336,4 +399,36 @@ message TradeUpdate {
 message OrderBookUpdate {
   string topic = 1;        // 订阅topic作为唯一标识
   OrderBook orderbook = 2;
+}
+
+// =====================================================================================
+// 新增的推送消息类型
+// =====================================================================================
+
+// MiniTickerUpdate 轻量级ticker推送
+message MiniTickerUpdate {
+  string topic = 1;               // 订阅topic
+  MiniTicker mini_ticker = 2;     // 轻量级ticker数据
+  string source_stream = 3;       // 源流名称 (如: @miniTicker)
+}
+
+// MarkPriceUpdate 标记价格推送
+message MarkPriceUpdate {
+  string topic = 1;               // 订阅topic
+  MarkPrice mark_price = 2;       // 标记价格数据
+  string source_stream = 3;       // 源流名称 (如: @markPrice)
+}
+
+// BookTickerUpdate 最优买卖价推送
+message BookTickerUpdate {
+  string topic = 1;               // 订阅topic
+  BookTicker book_ticker = 2;     // 最优买卖价数据
+  string source_stream = 3;       // 源流名称 (如: @bookTicker)
+}
+
+// FullTickerUpdate 完整ticker推送 (用于特殊需求)
+message FullTickerUpdate {
+  string topic = 1;               // 订阅topic
+  Ticker ticker = 2;              // 完整ticker数据
+  string source_stream = 3;       // 源流名称 (如: @ticker)
 }

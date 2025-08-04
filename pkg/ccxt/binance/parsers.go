@@ -1141,3 +1141,55 @@ func (b *Binance) parseOrderUpdate(data map[string]interface{}) *ccxt.Order {
 		Info:               data,
 	}
 }
+
+// =====================================================================================
+// 新增的数据解析器 - 支持增强协议
+// =====================================================================================
+
+// ParseMiniTicker 解析轻量级ticker数据
+func (b *Binance) ParseMiniTicker(data map[string]interface{}, symbol string) *ccxt.WatchMiniTicker {
+	timestamp := b.SafeInt(data, "E", 0)
+
+	return &ccxt.WatchMiniTicker{
+		Symbol:      symbol,
+		TimeStamp:   timestamp,
+		Open:        b.SafeFloat(data, "o", 0),
+		High:        b.SafeFloat(data, "h", 0),
+		Low:         b.SafeFloat(data, "l", 0),
+		Close:       b.SafeFloat(data, "c", 0),
+		Volume:      b.SafeFloat(data, "v", 0),
+		QuoteVolume: b.SafeFloat(data, "q", 0),
+		StreamName:  fmt.Sprintf("%s@miniTicker", strings.ToLower(symbol)),
+	}
+}
+
+// ParseMarkPrice 解析标记价格数据
+func (b *Binance) ParseMarkPrice(data map[string]interface{}, symbol string) *ccxt.WatchMarkPrice {
+	timestamp := b.SafeInt(data, "E", 0)
+
+	return &ccxt.WatchMarkPrice{
+		Symbol:               symbol,
+		TimeStamp:            timestamp,
+		MarkPrice:            b.SafeFloat(data, "m", 0),
+		IndexPrice:           b.SafeFloat(data, "i", 0),
+		EstimatedSettlePrice: b.SafeFloat(data, "P", 0),
+		FundingRate:          b.SafeFloat(data, "r", 0),
+		FundingTime:          b.SafeInt(data, "T", 0),
+		StreamName:           fmt.Sprintf("%s@markPrice", strings.ToLower(symbol)),
+	}
+}
+
+// ParseBookTicker 解析最优买卖价数据
+func (b *Binance) ParseBookTicker(data map[string]interface{}, symbol string) *ccxt.WatchBookTicker {
+	timestamp := b.SafeInt(data, "E", 0)
+
+	return &ccxt.WatchBookTicker{
+		Symbol:      symbol,
+		TimeStamp:   timestamp,
+		BidPrice:    b.SafeFloat(data, "b", 0),
+		BidQuantity: b.SafeFloat(data, "B", 0),
+		AskPrice:    b.SafeFloat(data, "a", 0),
+		AskQuantity: b.SafeFloat(data, "A", 0),
+		StreamName:  fmt.Sprintf("%s@bookTicker", strings.ToLower(symbol)),
+	}
+}

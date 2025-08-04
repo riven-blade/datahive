@@ -39,11 +39,14 @@ type Event struct {
 type EventType string
 
 const (
-	EventPrice     EventType = "price"  // 轻量级价格数据
-	EventTicker    EventType = "ticker" // 完整行情数据
-	EventKline     EventType = "kline"
-	EventTrade     EventType = "trade"
-	EventOrderBook EventType = "orderbook"
+	EventPrice      EventType = "price"      // 通用价格数据
+	EventMiniTicker EventType = "miniTicker" // 轻量级ticker数据
+	EventMarkPrice  EventType = "markPrice"  // 标记价格数据(仅期货)
+	EventBookTicker EventType = "bookTicker" // 最优买卖价数据
+	EventTicker     EventType = "ticker"     // 完整行情数据
+	EventKline      EventType = "kline"
+	EventTrade      EventType = "trade"
+	EventOrderBook  EventType = "orderbook"
 )
 
 // SubscriptionRequest 订阅请求

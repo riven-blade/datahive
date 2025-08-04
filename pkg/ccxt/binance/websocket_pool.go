@@ -569,3 +569,85 @@ func (p *WebSocketPool) Close() error {
 
 	return nil
 }
+
+// =====================================================================================
+// 新增的增强Watch方法 - 支持新协议
+// =====================================================================================
+
+// WatchMiniTicker 监听轻量级ticker数据
+func (p *WebSocketPool) WatchMiniTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMiniTicker, error) {
+	instance, err := p.getInstanceForSymbol(symbol)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// 连接实例（如果尚未连接）
+	if !instance.IsConnected() {
+		if err := instance.Connect(ctx); err != nil {
+			return "", nil, fmt.Errorf("failed to connect instance %d: %w", instance.id, err)
+		}
+	}
+
+	// 调用实例的WatchMiniTicker
+	subscriptionID, resultChan, err := instance.WatchMiniTicker(ctx, symbol, params)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// 增加订阅计数
+	atomic.AddInt32(&instance.subscriptions, 1)
+
+	return subscriptionID, resultChan, nil
+}
+
+// WatchMarkPrice 监听标记价格数据(仅期货)
+func (p *WebSocketPool) WatchMarkPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMarkPrice, error) {
+	instance, err := p.getInstanceForSymbol(symbol)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// 连接实例（如果尚未连接）
+	if !instance.IsConnected() {
+		if err := instance.Connect(ctx); err != nil {
+			return "", nil, fmt.Errorf("failed to connect instance %d: %w", instance.id, err)
+		}
+	}
+
+	// 调用实例的WatchMarkPrice
+	subscriptionID, resultChan, err := instance.WatchMarkPrice(ctx, symbol, params)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// 增加订阅计数
+	atomic.AddInt32(&instance.subscriptions, 1)
+
+	return subscriptionID, resultChan, nil
+}
+
+// WatchBookTicker 监听最优买卖价数据
+func (p *WebSocketPool) WatchBookTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchBookTicker, error) {
+	instance, err := p.getInstanceForSymbol(symbol)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// 连接实例（如果尚未连接）
+	if !instance.IsConnected() {
+		if err := instance.Connect(ctx); err != nil {
+			return "", nil, fmt.Errorf("failed to connect instance %d: %w", instance.id, err)
+		}
+	}
+
+	// 调用实例的WatchBookTicker
+	subscriptionID, resultChan, err := instance.WatchBookTicker(ctx, symbol, params)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// 增加订阅计数
+	atomic.AddInt32(&instance.subscriptions, 1)
+
+	return subscriptionID, resultChan, nil
+}

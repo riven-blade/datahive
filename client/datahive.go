@@ -30,6 +30,10 @@ type DataHiveClient interface {
 
 	// 实时订阅 (WebSocket)
 	WatchPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.PriceUpdate, string, error)
+	WatchMiniTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.MiniTickerUpdate, string, error)
+	WatchMarkPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.MarkPriceUpdate, string, error)
+	WatchBookTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.BookTickerUpdate, string, error)
+	WatchFullTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.FullTickerUpdate, string, error)
 	WatchKline(ctx context.Context, exchange, marketType, symbol, timeframe string) (<-chan *pb.KlineUpdate, string, error)
 	WatchTrades(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.TradeUpdate, string, error)
 	WatchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (<-chan *pb.OrderBookUpdate, string, error)
@@ -43,15 +47,19 @@ type DataHiveClient interface {
 // subscription 订阅信息
 type subscription struct {
 	ID       string
-	Type     string // price, kline, trades, orderbook
+	Type     string // price, miniTicker, markPrice, bookTicker, fullTicker, kline, trades, orderbook
 	Exchange string
 	Symbol   string
 
 	// Channels
-	PriceCh     chan *pb.PriceUpdate
-	KlineCh     chan *pb.KlineUpdate
-	TradesCh    chan *pb.TradeUpdate
-	OrderBookCh chan *pb.OrderBookUpdate
+	PriceCh      chan *pb.PriceUpdate
+	MiniTickerCh chan *pb.MiniTickerUpdate
+	MarkPriceCh  chan *pb.MarkPriceUpdate
+	BookTickerCh chan *pb.BookTickerUpdate
+	FullTickerCh chan *pb.FullTickerUpdate
+	KlineCh      chan *pb.KlineUpdate
+	TradesCh     chan *pb.TradeUpdate
+	OrderBookCh  chan *pb.OrderBookUpdate
 
 	// 生命周期
 	cancel context.CancelFunc
@@ -504,6 +512,206 @@ func (c *dataHiveClient) WatchOrderBook(ctx context.Context, exchange, marketTyp
 	c.subMutex.Unlock()
 
 	return orderBookCh, sub.ID, nil
+}
+
+// =====================================================================================
+// 新增的Watch方法 - 支持增强协议
+// =====================================================================================
+
+// WatchMiniTicker 订阅轻量级ticker更新
+func (c *dataHiveClient) WatchMiniTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.MiniTickerUpdate, string, error) {
+	req := &pb.SubscribeRequest{
+		Exchange:   exchange,
+		MarketType: marketType,
+		Symbol:     symbol,
+		DataType:   pb.DataType_MINI_TICKER,
+	}
+
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_SUBSCRIBE, data, 30*time.Second)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var subscribeResp pb.SubscribeResponse
+	if err := proto.Unmarshal(resp.Data, &subscribeResp); err != nil {
+		return nil, "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if !subscribeResp.Success {
+		return nil, "", fmt.Errorf("subscription failed: %s", subscribeResp.Message)
+	}
+
+	// 创建订阅
+	miniTickerCh := make(chan *pb.MiniTickerUpdate, 100)
+	_, cancel := context.WithCancel(ctx)
+
+	sub := &subscription{
+		ID:           subscribeResp.Topic,
+		Type:         "miniTicker",
+		Exchange:     exchange,
+		Symbol:       symbol,
+		MiniTickerCh: miniTickerCh,
+		cancel:       cancel,
+		done:         make(chan struct{}),
+	}
+
+	c.subMutex.Lock()
+	c.subscriptions[sub.ID] = sub
+	c.subMutex.Unlock()
+
+	return miniTickerCh, sub.ID, nil
+}
+
+// WatchMarkPrice 订阅标记价格更新
+func (c *dataHiveClient) WatchMarkPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.MarkPriceUpdate, string, error) {
+	req := &pb.SubscribeRequest{
+		Exchange:   exchange,
+		MarketType: marketType,
+		Symbol:     symbol,
+		DataType:   pb.DataType_MARK_PRICE,
+	}
+
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_SUBSCRIBE, data, 30*time.Second)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var subscribeResp pb.SubscribeResponse
+	if err := proto.Unmarshal(resp.Data, &subscribeResp); err != nil {
+		return nil, "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if !subscribeResp.Success {
+		return nil, "", fmt.Errorf("subscription failed: %s", subscribeResp.Message)
+	}
+
+	// 创建订阅
+	markPriceCh := make(chan *pb.MarkPriceUpdate, 100)
+	_, cancel := context.WithCancel(ctx)
+
+	sub := &subscription{
+		ID:          subscribeResp.Topic,
+		Type:        "markPrice",
+		Exchange:    exchange,
+		Symbol:      symbol,
+		MarkPriceCh: markPriceCh,
+		cancel:      cancel,
+		done:        make(chan struct{}),
+	}
+
+	c.subMutex.Lock()
+	c.subscriptions[sub.ID] = sub
+	c.subMutex.Unlock()
+
+	return markPriceCh, sub.ID, nil
+}
+
+// WatchBookTicker 订阅最优买卖价更新
+func (c *dataHiveClient) WatchBookTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.BookTickerUpdate, string, error) {
+	req := &pb.SubscribeRequest{
+		Exchange:   exchange,
+		MarketType: marketType,
+		Symbol:     symbol,
+		DataType:   pb.DataType_BOOK_TICKER,
+	}
+
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_SUBSCRIBE, data, 30*time.Second)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var subscribeResp pb.SubscribeResponse
+	if err := proto.Unmarshal(resp.Data, &subscribeResp); err != nil {
+		return nil, "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if !subscribeResp.Success {
+		return nil, "", fmt.Errorf("subscription failed: %s", subscribeResp.Message)
+	}
+
+	// 创建订阅
+	bookTickerCh := make(chan *pb.BookTickerUpdate, 100)
+	_, cancel := context.WithCancel(ctx)
+
+	sub := &subscription{
+		ID:           subscribeResp.Topic,
+		Type:         "bookTicker",
+		Exchange:     exchange,
+		Symbol:       symbol,
+		BookTickerCh: bookTickerCh,
+		cancel:       cancel,
+		done:         make(chan struct{}),
+	}
+
+	c.subMutex.Lock()
+	c.subscriptions[sub.ID] = sub
+	c.subMutex.Unlock()
+
+	return bookTickerCh, sub.ID, nil
+}
+
+// WatchFullTicker 订阅完整ticker更新
+func (c *dataHiveClient) WatchFullTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.FullTickerUpdate, string, error) {
+	req := &pb.SubscribeRequest{
+		Exchange:   exchange,
+		MarketType: marketType,
+		Symbol:     symbol,
+		DataType:   pb.DataType_FULL_TICKER,
+	}
+
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_SUBSCRIBE, data, 30*time.Second)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var subscribeResp pb.SubscribeResponse
+	if err := proto.Unmarshal(resp.Data, &subscribeResp); err != nil {
+		return nil, "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if !subscribeResp.Success {
+		return nil, "", fmt.Errorf("subscription failed: %s", subscribeResp.Message)
+	}
+
+	// 创建订阅
+	fullTickerCh := make(chan *pb.FullTickerUpdate, 100)
+	_, cancel := context.WithCancel(ctx)
+
+	sub := &subscription{
+		ID:           subscribeResp.Topic,
+		Type:         "fullTicker",
+		Exchange:     exchange,
+		Symbol:       symbol,
+		FullTickerCh: fullTickerCh,
+		cancel:       cancel,
+		done:         make(chan struct{}),
+	}
+
+	c.subMutex.Lock()
+	c.subscriptions[sub.ID] = sub
+	c.subMutex.Unlock()
+
+	return fullTickerCh, sub.ID, nil
 }
 
 // Unwatch 取消订阅
