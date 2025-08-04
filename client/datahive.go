@@ -29,7 +29,7 @@ type DataHiveClient interface {
 	FetchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (*pb.OrderBook, error)
 
 	// 实时订阅 (WebSocket)
-	WatchTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.TickerUpdate, string, error)
+	WatchPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.PriceUpdate, string, error)
 	WatchKline(ctx context.Context, exchange, marketType, symbol, timeframe string) (<-chan *pb.KlineUpdate, string, error)
 	WatchTrades(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.TradeUpdate, string, error)
 	WatchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (<-chan *pb.OrderBookUpdate, string, error)
@@ -43,12 +43,12 @@ type DataHiveClient interface {
 // subscription 订阅信息
 type subscription struct {
 	ID       string
-	Type     string // ticker, kline, trades, orderbook
+	Type     string // price, kline, trades, orderbook
 	Exchange string
 	Symbol   string
 
 	// Channels
-	TickerCh    chan *pb.TickerUpdate
+	PriceCh     chan *pb.PriceUpdate
 	KlineCh     chan *pb.KlineUpdate
 	TradesCh    chan *pb.TradeUpdate
 	OrderBookCh chan *pb.OrderBookUpdate
@@ -302,13 +302,13 @@ func (c *dataHiveClient) FetchOrderBook(ctx context.Context, exchange, marketTyp
 // Watch Methods (Real-time WebSocket)
 // =============================================================================
 
-// WatchTicker 订阅价格更新
-func (c *dataHiveClient) WatchTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.TickerUpdate, string, error) {
+// WatchPrice 订阅轻量级价格更新
+func (c *dataHiveClient) WatchPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.PriceUpdate, string, error) {
 	req := &pb.SubscribeRequest{
 		Exchange:   exchange,
 		MarketType: marketType,
 		Symbol:     symbol,
-		DataType:   pb.DataType_TICKER,
+		DataType:   pb.DataType_PRICE,
 	}
 
 	data, err := proto.Marshal(req)
@@ -331,15 +331,15 @@ func (c *dataHiveClient) WatchTicker(ctx context.Context, exchange, marketType, 
 	}
 
 	// 创建订阅
-	tickerCh := make(chan *pb.TickerUpdate, 100)
+	priceCh := make(chan *pb.PriceUpdate, 100)
 	_, cancel := context.WithCancel(ctx)
 
 	sub := &subscription{
 		ID:       subscribeResp.Topic,
-		Type:     "ticker",
+		Type:     "price",
 		Exchange: exchange,
 		Symbol:   symbol,
-		TickerCh: tickerCh,
+		PriceCh:  priceCh,
 		cancel:   cancel,
 		done:     make(chan struct{}),
 	}
@@ -348,7 +348,7 @@ func (c *dataHiveClient) WatchTicker(ctx context.Context, exchange, marketType, 
 	c.subscriptions[sub.ID] = sub
 	c.subMutex.Unlock()
 
-	return tickerCh, sub.ID, nil
+	return priceCh, sub.ID, nil
 }
 
 // WatchKline 订阅K线更新
@@ -539,31 +539,31 @@ func (c *dataHiveClient) Unwatch(subscriptionID string) error {
 
 // registerHandlers 注册消息处理器
 func (c *dataHiveClient) registerHandlers() {
-	c.client.RegisterHandler(pb.ActionType_TICKER_UPDATE, c.handleTickerUpdate)
+	c.client.RegisterHandler(pb.ActionType_PRICE_UPDATE, c.handlePriceUpdate)
 	c.client.RegisterHandler(pb.ActionType_KLINE_UPDATE, c.handleKlineUpdate)
 	c.client.RegisterHandler(pb.ActionType_TRADE_UPDATE, c.handleTradeUpdate)
 	c.client.RegisterHandler(pb.ActionType_ORDERBOOK_UPDATE, c.handleOrderBookUpdate)
 }
 
-// handleTickerUpdate 处理ticker更新消息
-func (c *dataHiveClient) handleTickerUpdate(msg *pb.Message) error {
-	var update pb.TickerUpdate
+// handlePriceUpdate 处理价格更新消息
+func (c *dataHiveClient) handlePriceUpdate(msg *pb.Message) error {
+	var update pb.PriceUpdate
 	if err := proto.Unmarshal(msg.Data, &update); err != nil {
-		return fmt.Errorf("failed to unmarshal ticker update: %w", err)
+		return fmt.Errorf("failed to unmarshal price update: %w", err)
 	}
 
 	c.subMutex.RLock()
 	sub, exists := c.subscriptions[update.Topic]
 	c.subMutex.RUnlock()
 
-	if !exists || sub.TickerCh == nil {
+	if !exists || sub.PriceCh == nil {
 		return nil
 	}
 
 	select {
-	case sub.TickerCh <- &update:
+	case sub.PriceCh <- &update:
 	default:
-		c.logger.Warn("Ticker channel full, dropping message", zap.String("topic", update.Topic))
+		c.logger.Warn("Price channel full, dropping message", zap.String("topic", update.Topic))
 	}
 
 	return nil
@@ -652,8 +652,8 @@ func (c *dataHiveClient) closeSubscription(sub *subscription) {
 	}
 
 	// 关闭channels
-	if sub.TickerCh != nil {
-		close(sub.TickerCh)
+	if sub.PriceCh != nil {
+		close(sub.PriceCh)
 	}
 	if sub.KlineCh != nil {
 		close(sub.KlineCh)

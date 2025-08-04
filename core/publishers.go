@@ -30,9 +30,9 @@ func (p *EventPublisher) Publish(ctx context.Context, event Event) error {
 	var err error
 
 	switch event.Type {
-	case EventTicker:
-		action = pb.ActionType_TICKER_UPDATE
-		data, err = p.serializeTickerUpdate(event)
+	case EventPrice:
+		action = pb.ActionType_PRICE_UPDATE
+		data, err = p.serializePriceUpdate(event)
 	case EventKline:
 		action = pb.ActionType_KLINE_UPDATE
 		data, err = p.serializeKlineUpdate(event)
@@ -53,36 +53,23 @@ func (p *EventPublisher) Publish(ctx context.Context, event Event) error {
 	return p.transport.Broadcast(action, data, event.Topic)
 }
 
-// serializeTickerUpdate 序列化ticker更新事件
-func (p *EventPublisher) serializeTickerUpdate(event Event) ([]byte, error) {
+// serializePriceUpdate 序列化价格更新事件
+func (p *EventPublisher) serializePriceUpdate(event Event) ([]byte, error) {
 	// 统一要求Data为map类型
-	tickerData, ok := event.Data.(map[string]interface{})
+	priceData, ok := event.Data.(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("invalid ticker data type, expected map[string]interface{}")
+		return nil, fmt.Errorf("invalid price data type, expected map[string]interface{}")
 	}
 
-	// 转换为protobuf格式
-	protocolTicker := &pb.Ticker{
-		Symbol:        getStringFromData(tickerData, "symbol"),
-		Timestamp:     getInt64FromData(tickerData, "timestamp"),
-		Last:          getFloat64FromData(tickerData, "last"),
-		Bid:           getFloat64FromData(tickerData, "bid"),
-		Ask:           getFloat64FromData(tickerData, "ask"),
-		High:          getFloat64FromData(tickerData, "high"),
-		Low:           getFloat64FromData(tickerData, "low"),
-		Open:          getFloat64FromData(tickerData, "open"),
-		Close:         getFloat64FromData(tickerData, "close"),
-		Volume:        getFloat64FromData(tickerData, "volume"),
-		Change:        getFloat64FromData(tickerData, "change"),
-		ChangePercent: getFloat64FromData(tickerData, "percentage"),
+	// 转换为protobuf格式的轻量级价格更新
+	priceUpdate := &pb.PriceUpdate{
+		Topic:     event.Topic,
+		Symbol:    getStringFromData(priceData, "symbol"),
+		Price:     getFloat64FromData(priceData, "price"),
+		Timestamp: getInt64FromData(priceData, "timestamp"),
 	}
 
-	tickerUpdate := &pb.TickerUpdate{
-		Topic:  event.Topic,
-		Ticker: protocolTicker,
-	}
-
-	return proto.Marshal(tickerUpdate)
+	return proto.Marshal(priceUpdate)
 }
 
 // serializeKlineUpdate 序列化K线更新事件

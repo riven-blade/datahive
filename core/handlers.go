@@ -3,12 +3,13 @@ package core
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/riven-blade/datahive/pkg/ccxt"
 	"github.com/riven-blade/datahive/pkg/logger"
 	"github.com/riven-blade/datahive/pkg/protocol/pb"
 	"github.com/riven-blade/datahive/pkg/server"
 	"github.com/riven-blade/datahive/pkg/utils"
-	"strings"
 
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
@@ -485,8 +486,8 @@ func (h *Handlers) HandleHealth(conn server.Connection, msg *pb.Message) error {
 // convertDataTypeToEventType 转换新的DataType枚举到EventType
 func convertDataTypeToEventType(dataType pb.DataType) (EventType, error) {
 	switch dataType {
-	case pb.DataType_TICKER:
-		return EventTicker, nil
+	case pb.DataType_PRICE:
+		return EventPrice, nil
 	case pb.DataType_KLINE:
 		return EventKline, nil
 	case pb.DataType_TRADE:

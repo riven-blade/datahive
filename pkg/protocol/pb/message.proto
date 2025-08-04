@@ -41,7 +41,7 @@ enum ActionType {
   
   // 数据推送
   MARKET_UPDATE = 20;
-  TICKER_UPDATE = 21;
+  PRICE_UPDATE = 21;       // 轻量级价格更新
   KLINE_UPDATE = 22;
   TRADE_UPDATE = 23;
   ORDERBOOK_UPDATE = 24;
@@ -140,7 +140,7 @@ message PriceLevel {
 
 // DataType 数据类型枚举
 enum DataType {
-  TICKER = 0;      // 行情数据
+  PRICE = 0;       // 轻量级价格数据
   KLINE = 1;       // K线数据
   TRADE = 2;       // 交易数据
   ORDERBOOK = 3;   // 订单簿数据
@@ -167,7 +167,7 @@ message SubscribeResponse {
 
 // UnsubscribeRequest 取消订阅请求
 message UnsubscribeRequest {
-  string topic = 1;         // 订阅topic（直接使用topic字符串）
+  string topic = 1;
 }
 
 // UnsubscribeResponse 取消订阅响应
@@ -263,10 +263,12 @@ message FetchOrderBookResponse {
 // 数据推送
 // =====================================================================================
 
-// TickerUpdate 行情更新推送
-message TickerUpdate {
+// PriceUpdate 轻量级价格更新推送
+message PriceUpdate {
   string topic = 1;        // 订阅topic作为唯一标识
-  Ticker ticker = 2;
+  string symbol = 2;       // 交易对符号
+  double price = 3;        // 价格
+  int64 timestamp = 4;     // 时间戳
 }
 
 // KlineUpdate K线更新推送

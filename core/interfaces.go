@@ -39,7 +39,8 @@ type Event struct {
 type EventType string
 
 const (
-	EventTicker    EventType = "ticker"
+	EventPrice     EventType = "price"  // 轻量级价格数据
+	EventTicker    EventType = "ticker" // 完整行情数据
 	EventKline     EventType = "kline"
 	EventTrade     EventType = "trade"
 	EventOrderBook EventType = "orderbook"

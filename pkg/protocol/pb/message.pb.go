@@ -90,7 +90,7 @@ const (
 	ActionType_FETCH_ORDERBOOK ActionType = 15
 	// 数据推送
 	ActionType_MARKET_UPDATE    ActionType = 20
-	ActionType_TICKER_UPDATE    ActionType = 21
+	ActionType_PRICE_UPDATE     ActionType = 21 // 轻量级价格更新
 	ActionType_KLINE_UPDATE     ActionType = 22
 	ActionType_TRADE_UPDATE     ActionType = 23
 	ActionType_ORDERBOOK_UPDATE ActionType = 24
@@ -108,7 +108,7 @@ var (
 		14: "FETCH_TRADES",
 		15: "FETCH_ORDERBOOK",
 		20: "MARKET_UPDATE",
-		21: "TICKER_UPDATE",
+		21: "PRICE_UPDATE",
 		22: "KLINE_UPDATE",
 		23: "TRADE_UPDATE",
 		24: "ORDERBOOK_UPDATE",
@@ -123,7 +123,7 @@ var (
 		"FETCH_TRADES":     14,
 		"FETCH_ORDERBOOK":  15,
 		"MARKET_UPDATE":    20,
-		"TICKER_UPDATE":    21,
+		"PRICE_UPDATE":     21,
 		"KLINE_UPDATE":     22,
 		"TRADE_UPDATE":     23,
 		"ORDERBOOK_UPDATE": 24,
@@ -161,7 +161,7 @@ func (ActionType) EnumDescriptor() ([]byte, []int) {
 type DataType int32
 
 const (
-	DataType_TICKER    DataType = 0 // 行情数据
+	DataType_PRICE     DataType = 0 // 轻量级价格数据
 	DataType_KLINE     DataType = 1 // K线数据
 	DataType_TRADE     DataType = 2 // 交易数据
 	DataType_ORDERBOOK DataType = 3 // 订单簿数据
@@ -170,13 +170,13 @@ const (
 // Enum value maps for DataType.
 var (
 	DataType_name = map[int32]string{
-		0: "TICKER",
+		0: "PRICE",
 		1: "KLINE",
 		2: "TRADE",
 		3: "ORDERBOOK",
 	}
 	DataType_value = map[string]int32{
-		"TICKER":    0,
+		"PRICE":     0,
 		"KLINE":     1,
 		"TRADE":     2,
 		"ORDERBOOK": 3,
@@ -1023,7 +1023,7 @@ func (x *SubscribeRequest) GetDataType() DataType {
 	if x != nil {
 		return x.DataType
 	}
-	return DataType_TICKER
+	return DataType_PRICE
 }
 
 func (x *SubscribeRequest) GetKlineInterval() string {
@@ -1104,7 +1104,7 @@ func (x *SubscribeResponse) GetTopic() string {
 // UnsubscribeRequest 取消订阅请求
 type UnsubscribeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Topic         string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"` // 订阅topic（直接使用topic字符串）
+	Topic         string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1891,29 +1891,31 @@ func (x *FetchOrderBookResponse) GetOrderbook() *OrderBook {
 	return nil
 }
 
-// TickerUpdate 行情更新推送
-type TickerUpdate struct {
+// PriceUpdate 轻量级价格更新推送
+type PriceUpdate struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Topic         string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"` // 订阅topic作为唯一标识
-	Ticker        *Ticker                `protobuf:"bytes,2,opt,name=ticker,proto3" json:"ticker,omitempty"`
+	Topic         string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`          // 订阅topic作为唯一标识
+	Symbol        string                 `protobuf:"bytes,2,opt,name=symbol,proto3" json:"symbol,omitempty"`        // 交易对符号
+	Price         float64                `protobuf:"fixed64,3,opt,name=price,proto3" json:"price,omitempty"`        // 价格
+	Timestamp     int64                  `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"` // 时间戳
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *TickerUpdate) Reset() {
-	*x = TickerUpdate{}
+func (x *PriceUpdate) Reset() {
+	*x = PriceUpdate{}
 	mi := &file_pkg_protocol_pb_message_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *TickerUpdate) String() string {
+func (x *PriceUpdate) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*TickerUpdate) ProtoMessage() {}
+func (*PriceUpdate) ProtoMessage() {}
 
-func (x *TickerUpdate) ProtoReflect() protoreflect.Message {
+func (x *PriceUpdate) ProtoReflect() protoreflect.Message {
 	mi := &file_pkg_protocol_pb_message_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1925,23 +1927,37 @@ func (x *TickerUpdate) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use TickerUpdate.ProtoReflect.Descriptor instead.
-func (*TickerUpdate) Descriptor() ([]byte, []int) {
+// Deprecated: Use PriceUpdate.ProtoReflect.Descriptor instead.
+func (*PriceUpdate) Descriptor() ([]byte, []int) {
 	return file_pkg_protocol_pb_message_proto_rawDescGZIP(), []int{24}
 }
 
-func (x *TickerUpdate) GetTopic() string {
+func (x *PriceUpdate) GetTopic() string {
 	if x != nil {
 		return x.Topic
 	}
 	return ""
 }
 
-func (x *TickerUpdate) GetTicker() *Ticker {
+func (x *PriceUpdate) GetSymbol() string {
 	if x != nil {
-		return x.Ticker
+		return x.Symbol
 	}
-	return nil
+	return ""
+}
+
+func (x *PriceUpdate) GetPrice() float64 {
+	if x != nil {
+		return x.Price
+	}
+	return 0
+}
+
+func (x *PriceUpdate) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
 }
 
 // KlineUpdate K线更新推送
@@ -2246,11 +2262,12 @@ const file_pkg_protocol_pb_message_proto_rawDesc = "" +
 	"\vmarket_type\x18\x04 \x01(\tR\n" +
 	"marketType\"E\n" +
 	"\x16FetchOrderBookResponse\x12+\n" +
-	"\torderbook\x18\x01 \x01(\v2\r.pb.OrderBookR\torderbook\"H\n" +
-	"\fTickerUpdate\x12\x14\n" +
-	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\"\n" +
-	"\x06ticker\x18\x02 \x01(\v2\n" +
-	".pb.TickerR\x06ticker\"D\n" +
+	"\torderbook\x18\x01 \x01(\v2\r.pb.OrderBookR\torderbook\"o\n" +
+	"\vPriceUpdate\x12\x14\n" +
+	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\x16\n" +
+	"\x06symbol\x18\x02 \x01(\tR\x06symbol\x12\x14\n" +
+	"\x05price\x18\x03 \x01(\x01R\x05price\x12\x1c\n" +
+	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"D\n" +
 	"\vKlineUpdate\x12\x14\n" +
 	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\x1f\n" +
 	"\x05kline\x18\x02 \x01(\v2\t.pb.KlineR\x05kline\"D\n" +
@@ -2264,7 +2281,7 @@ const file_pkg_protocol_pb_message_proto_rawDesc = "" +
 	"\aREQUEST\x10\x00\x12\f\n" +
 	"\bRESPONSE\x10\x01\x12\x10\n" +
 	"\fNOTIFICATION\x10\x02\x12\t\n" +
-	"\x05ERROR\x10\x03*\xfd\x01\n" +
+	"\x05ERROR\x10\x03*\xfc\x01\n" +
 	"\n" +
 	"ActionType\x12\r\n" +
 	"\tSUBSCRIBE\x10\x00\x12\x0f\n" +
@@ -2276,14 +2293,13 @@ const file_pkg_protocol_pb_message_proto_rawDesc = "" +
 	"\fFETCH_KLINES\x10\r\x12\x10\n" +
 	"\fFETCH_TRADES\x10\x0e\x12\x13\n" +
 	"\x0fFETCH_ORDERBOOK\x10\x0f\x12\x11\n" +
-	"\rMARKET_UPDATE\x10\x14\x12\x11\n" +
-	"\rTICKER_UPDATE\x10\x15\x12\x10\n" +
+	"\rMARKET_UPDATE\x10\x14\x12\x10\n" +
+	"\fPRICE_UPDATE\x10\x15\x12\x10\n" +
 	"\fKLINE_UPDATE\x10\x16\x12\x10\n" +
 	"\fTRADE_UPDATE\x10\x17\x12\x14\n" +
-	"\x10ORDERBOOK_UPDATE\x10\x18*;\n" +
-	"\bDataType\x12\n" +
-	"\n" +
-	"\x06TICKER\x10\x00\x12\t\n" +
+	"\x10ORDERBOOK_UPDATE\x10\x18*:\n" +
+	"\bDataType\x12\t\n" +
+	"\x05PRICE\x10\x00\x12\t\n" +
 	"\x05KLINE\x10\x01\x12\t\n" +
 	"\x05TRADE\x10\x02\x12\r\n" +
 	"\tORDERBOOK\x10\x03B1Z/github.com/riven-blade/datahive/pkg/protocol/pbb\x06proto3"
@@ -2330,7 +2346,7 @@ var file_pkg_protocol_pb_message_proto_goTypes = []any{
 	(*FetchTradesResponse)(nil),    // 24: pb.FetchTradesResponse
 	(*FetchOrderBookRequest)(nil),  // 25: pb.FetchOrderBookRequest
 	(*FetchOrderBookResponse)(nil), // 26: pb.FetchOrderBookResponse
-	(*TickerUpdate)(nil),           // 27: pb.TickerUpdate
+	(*PriceUpdate)(nil),            // 27: pb.PriceUpdate
 	(*KlineUpdate)(nil),            // 28: pb.KlineUpdate
 	(*TradeUpdate)(nil),            // 29: pb.TradeUpdate
 	(*OrderBookUpdate)(nil),        // 30: pb.OrderBookUpdate
@@ -2347,15 +2363,14 @@ var file_pkg_protocol_pb_message_proto_depIdxs = []int32{
 	7,  // 8: pb.FetchKlinesResponse.klines:type_name -> pb.Kline
 	8,  // 9: pb.FetchTradesResponse.trades:type_name -> pb.Trade
 	9,  // 10: pb.FetchOrderBookResponse.orderbook:type_name -> pb.OrderBook
-	6,  // 11: pb.TickerUpdate.ticker:type_name -> pb.Ticker
-	7,  // 12: pb.KlineUpdate.kline:type_name -> pb.Kline
-	8,  // 13: pb.TradeUpdate.trade:type_name -> pb.Trade
-	9,  // 14: pb.OrderBookUpdate.orderbook:type_name -> pb.OrderBook
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	7,  // 11: pb.KlineUpdate.kline:type_name -> pb.Kline
+	8,  // 12: pb.TradeUpdate.trade:type_name -> pb.Trade
+	9,  // 13: pb.OrderBookUpdate.orderbook:type_name -> pb.OrderBook
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_pkg_protocol_pb_message_proto_init() }

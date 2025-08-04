@@ -370,7 +370,7 @@ func (m *Miner) subscribeAction(sub *MinerSubscription) {
 	sub.CancelFunc = cancel
 
 	switch sub.Event {
-	case EventTicker:
+	case EventPrice:
 		var priceChan <-chan *ccxt.WatchPrice
 		subscriptionID, priceChan, err = m.client.WatchPrice(subCtx, sub.Symbol, params)
 		if err == nil {
@@ -543,7 +543,7 @@ func (m *Miner) processPrice(watchPrice *ccxt.WatchPrice) {
 	}
 
 	// 创建并发布事件
-	event := m.createEvent(EventTicker, priceData, watchPrice.StreamName)
+	event := m.createEvent(EventPrice, priceData, watchPrice.StreamName)
 	m.publishEvent(event)
 
 	// 保存到存储 - 转换为protocol格式
