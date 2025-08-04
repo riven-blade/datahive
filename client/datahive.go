@@ -21,7 +21,7 @@ type DataHiveClient interface {
 	IsConnected() bool
 
 	// 获取数据 (RESTful)
-	FetchMarkets(ctx context.Context, exchange, marketType, stackType string, reload ...bool) ([]*pb.Market, error)
+	FetchMarkets(ctx context.Context, exchange, marketType, stackType string, reload ...bool) (map[string]*pb.Market, error)
 	FetchTicker(ctx context.Context, exchange, marketType, symbol string) (*pb.Ticker, error)
 	FetchTickers(ctx context.Context, exchange, marketType string, symbols ...string) ([]*pb.Ticker, error)
 	FetchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string, since int64, limit int32) ([]*pb.Kline, error)
@@ -126,7 +126,7 @@ func (c *dataHiveClient) GetStats() *ClientStats {
 // =============================================================================
 
 // FetchMarkets 获取市场信息
-func (c *dataHiveClient) FetchMarkets(ctx context.Context, exchange, marketType, stackType string, reload ...bool) ([]*pb.Market, error) {
+func (c *dataHiveClient) FetchMarkets(ctx context.Context, exchange, marketType, stackType string, reload ...bool) (map[string]*pb.Market, error) {
 	req := &pb.FetchMarketsRequest{
 		Exchange:   exchange,
 		MarketType: marketType,
@@ -148,7 +148,13 @@ func (c *dataHiveClient) FetchMarkets(ctx context.Context, exchange, marketType,
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	return marketsResp.Markets, nil
+	// 将切片转换为 map，key 为 symbol
+	markets := make(map[string]*pb.Market)
+	for i := range marketsResp.Markets {
+		markets[marketsResp.Markets[i].Symbol] = marketsResp.Markets[i]
+	}
+
+	return markets, nil
 }
 
 // FetchTicker 获取单个ticker
