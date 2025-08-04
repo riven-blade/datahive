@@ -64,15 +64,59 @@ message Market {
   string symbol = 2;          // 标准化交易对符号
   string base = 3;            // 基础货币
   string quote = 4;           // 计价货币
-  bool active = 5;            // 是否活跃
-  string type = 6;            // 市场类型: spot, futures, swap等
+  string settle = 5;          // 结算货币 (期货合约)
+  string type = 6;            // 市场类型: spot, swap, future, option
+  
+  // 市场类型标识
   bool spot = 7;              // 是否现货
-  bool futures = 8;           // 是否期货
+  bool margin = 8;            // 是否支持保证金
   bool swap = 9;              // 是否永续合约
-  bool linear = 10;           // 是否线性合约
-  bool inverse = 11;          // 是否反向合约
-  double maker_fee = 12;      // 做市商手续费率
-  double taker_fee = 13;      // 吃单手续费率
+  bool future = 10;           // 是否期货
+  bool option = 11;           // 是否期权
+  bool active = 12;           // 是否活跃
+  bool contract = 13;         // 是否合约
+  bool linear = 14;           // 是否线性合约
+  bool inverse = 15;          // 是否反向合约
+  
+  // 费率信息
+  double maker_fee = 16;      // 做市商手续费率
+  double taker_fee = 17;      // 吃单手续费率
+  
+  // 合约相关信息
+  double contract_size = 18;  // 合约大小
+  int64 expiry = 19;          // 到期时间戳 (期货)
+  string expiry_datetime = 20; // 到期时间 ISO8601 格式
+  double strike = 21;         // 行权价 (期权)
+  string option_type = 22;    // call/put (期权)
+  
+  // 精度信息
+  MarketPrecision precision = 23;
+  
+  // 限制信息
+  MarketLimits limits = 24;
+  
+  string info = 25;
+}
+
+// MarketPrecision 市场精度信息
+message MarketPrecision {
+  double amount = 1;          // 数量精度
+  double price = 2;           // 价格精度
+  double cost = 3;            // 成本精度
+}
+
+// MarketLimits 市场限制信息
+message MarketLimits {
+  LimitRange leverage = 1;    // 杠杆范围
+  LimitRange amount = 2;      // 数量范围
+  LimitRange price = 3;       // 价格范围
+  LimitRange cost = 4;        // 成本范围
+}
+
+// LimitRange 范围限制
+message LimitRange {
+  double min = 1;             // 最小值
+  double max = 2;             // 最大值
 }
 
 // Ticker 行情数据

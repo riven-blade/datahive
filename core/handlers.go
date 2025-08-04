@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -186,21 +187,7 @@ func (h *Handlers) HandleFetchMarkets(conn server.Connection, msg *pb.Message) e
 	// 转换ccxt.Market到pb.Market
 	protocolMarkets := make([]*pb.Market, 0, len(markets))
 	for _, market := range markets {
-		protocolMarket := &pb.Market{
-			Id:       market.ID,
-			Symbol:   market.Symbol,
-			Base:     market.Base,
-			Quote:    market.Quote,
-			Active:   market.Active,
-			Type:     market.Type,
-			Spot:     market.Spot,
-			Futures:  market.Future, // Future -> Futures
-			Swap:     market.Swap,
-			Linear:   market.Linear,
-			Inverse:  market.Inverse,
-			MakerFee: market.Maker, // Maker -> MakerFee
-			TakerFee: market.Taker, // Taker -> TakerFee
-		}
+		protocolMarket := convertCCXTMarketToProtocol(market)
 		protocolMarkets = append(protocolMarkets, protocolMarket)
 	}
 
@@ -630,4 +617,70 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// convertCCXTMarketToProtocol 将 ccxt.Market 转换为 pb.Market
+func convertCCXTMarketToProtocol(market *ccxt.Market) *pb.Market {
+	// 转换精度信息
+	precision := &pb.MarketPrecision{
+		Amount: market.Precision.Amount,
+		Price:  market.Precision.Price,
+		Cost:   market.Precision.Cost,
+	}
+
+	// 转换限制信息
+	limits := &pb.MarketLimits{
+		Leverage: &pb.LimitRange{
+			Min: market.Limits.Leverage.Min,
+			Max: market.Limits.Leverage.Max,
+		},
+		Amount: &pb.LimitRange{
+			Min: market.Limits.Amount.Min,
+			Max: market.Limits.Amount.Max,
+		},
+		Price: &pb.LimitRange{
+			Min: market.Limits.Price.Min,
+			Max: market.Limits.Price.Max,
+		},
+		Cost: &pb.LimitRange{
+			Min: market.Limits.Cost.Min,
+			Max: market.Limits.Cost.Max,
+		},
+	}
+
+	// 将 Info 字段序列化为 JSON 字符串
+	var infoJSON string
+	if market.Info != nil {
+		if infoBytes, err := json.Marshal(market.Info); err == nil {
+			infoJSON = string(infoBytes)
+		}
+	}
+
+	return &pb.Market{
+		Id:             market.ID,
+		Symbol:         market.Symbol,
+		Base:           market.Base,
+		Quote:          market.Quote,
+		Settle:         market.Settle,
+		Type:           market.Type,
+		Spot:           market.Spot,
+		Margin:         market.Margin,
+		Swap:           market.Swap,
+		Future:         market.Future,
+		Option:         market.Option,
+		Active:         market.Active,
+		Contract:       market.Contract,
+		Linear:         market.Linear,
+		Inverse:        market.Inverse,
+		MakerFee:       market.Maker,
+		TakerFee:       market.Taker,
+		ContractSize:   market.ContractSize,
+		Expiry:         market.Expiry,
+		ExpiryDatetime: market.ExpiryDatetime,
+		Strike:         market.Strike,
+		OptionType:     market.OptionType,
+		Precision:      precision,
+		Limits:         limits,
+		Info:           infoJSON,
+	}
 }
