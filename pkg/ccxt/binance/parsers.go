@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"datahive/pkg/ccxt"
+	"datahive/pkg/utils"
 )
 
 // ========== 市场数据解析器 ==========
@@ -57,12 +58,14 @@ func (b *Binance) parseFuturesMarket(symbol *FuturesSymbolInfo) *ccxt.Market {
 	quote := symbol.QuoteAsset
 	settle := symbol.MarginAsset
 
-	// 构建标准化符号
+	// 构建标准化符号 - 期货市场总是包含settle信息以区分现货
 	var standardSymbol string
-	if settle != "" && settle != quote {
+	if settle != "" {
+		// 期货市场总是显示结算资产，避免与现货市场冲突
 		standardSymbol = base + "/" + quote + ":" + settle
 	} else {
-		standardSymbol = base + "/" + quote
+		// 如果没有settle信息，添加默认后缀区分期货
+		standardSymbol = base + "/" + quote + ":FUTURES"
 	}
 
 	precision := ccxt.MarketPrecision{
@@ -165,26 +168,43 @@ func (b *Binance) parseFuturesMarketLimits(filters []map[string]interface{}) ccx
 func (b *Binance) parseTicker(ticker *Ticker24HrResponse, market *ccxt.Market) *ccxt.Ticker {
 	timestamp := ticker.CloseTime
 
+	// 直接解析字符串价格数据
+	high, _ := strconv.ParseFloat(ticker.HighPrice, 64)
+	low, _ := strconv.ParseFloat(ticker.LowPrice, 64)
+	bid, _ := strconv.ParseFloat(ticker.BidPrice, 64)
+	bidVolume, _ := strconv.ParseFloat(ticker.BidQty, 64)
+	ask, _ := strconv.ParseFloat(ticker.AskPrice, 64)
+	askVolume, _ := strconv.ParseFloat(ticker.AskQty, 64)
+	vwap, _ := strconv.ParseFloat(ticker.WeightedAvgPrice, 64)
+	open, _ := strconv.ParseFloat(ticker.OpenPrice, 64)
+	close, _ := strconv.ParseFloat(ticker.LastPrice, 64)
+	last, _ := strconv.ParseFloat(ticker.LastPrice, 64)
+	previousClose, _ := strconv.ParseFloat(ticker.PrevClosePrice, 64)
+	change, _ := strconv.ParseFloat(ticker.PriceChange, 64)
+	percentage, _ := strconv.ParseFloat(ticker.PriceChangePercent, 64)
+	baseVolume, _ := strconv.ParseFloat(ticker.Volume, 64)
+	quoteVolume, _ := strconv.ParseFloat(ticker.QuoteVolume, 64)
+
 	return &ccxt.Ticker{
-		Symbol:        market.Symbol,
-		Timestamp:     timestamp,
-		Datetime:      b.ISO8601(timestamp),
-		High:          b.SafeFloat(map[string]interface{}{"value": ticker.HighPrice}, "value", 0),
-		Low:           b.SafeFloat(map[string]interface{}{"value": ticker.LowPrice}, "value", 0),
-		Bid:           b.SafeFloat(map[string]interface{}{"value": ticker.BidPrice}, "value", 0),
-		BidVolume:     b.SafeFloat(map[string]interface{}{"value": ticker.BidQty}, "value", 0),
-		Ask:           b.SafeFloat(map[string]interface{}{"value": ticker.AskPrice}, "value", 0),
-		AskVolume:     b.SafeFloat(map[string]interface{}{"value": ticker.AskQty}, "value", 0),
-		Vwap:          b.SafeFloat(map[string]interface{}{"value": ticker.WeightedAvgPrice}, "value", 0),
-		Open:          b.SafeFloat(map[string]interface{}{"value": ticker.OpenPrice}, "value", 0),
-		Close:         b.SafeFloat(map[string]interface{}{"value": ticker.LastPrice}, "value", 0),
-		Last:          b.SafeFloat(map[string]interface{}{"value": ticker.LastPrice}, "value", 0),
-		PreviousClose: b.SafeFloat(map[string]interface{}{"value": ticker.PrevClosePrice}, "value", 0),
-		Change:        b.SafeFloat(map[string]interface{}{"value": ticker.PriceChange}, "value", 0),
-		Percentage:    b.SafeFloat(map[string]interface{}{"value": ticker.PriceChangePercent}, "value", 0),
-		Average:       0, // 计算得出
-		BaseVolume:    b.SafeFloat(map[string]interface{}{"value": ticker.Volume}, "value", 0),
-		QuoteVolume:   b.SafeFloat(map[string]interface{}{"value": ticker.QuoteVolume}, "value", 0),
+		Symbol:        utils.SanitizeUTF8(market.Symbol),
+		TimeStamp:     timestamp,
+		Datetime:      utils.SanitizeUTF8(b.ISO8601(timestamp)),
+		High:          high,
+		Low:           low,
+		Bid:           bid,
+		BidVolume:     bidVolume,
+		Ask:           ask,
+		AskVolume:     askVolume,
+		Vwap:          vwap,
+		Open:          open,
+		Close:         close,
+		Last:          last,
+		PreviousClose: previousClose,
+		Change:        change,
+		Percentage:    percentage,
+		Average:       (bid + ask) / 2, // 计算平均价格
+		BaseVolume:    baseVolume,
+		QuoteVolume:   quoteVolume,
 		Info:          b.tickerToMap(ticker),
 	}
 }
@@ -221,7 +241,7 @@ func (b *Binance) parseOrderBook(depth *DepthResponse, symbol string) *ccxt.Orde
 		Symbol:    symbol,
 		Bids:      ccxt.OrderBookSide{Price: bidPrices, Size: bidSizes},
 		Asks:      ccxt.OrderBookSide{Price: askPrices, Size: askSizes},
-		Timestamp: timestamp,
+		TimeStamp: timestamp,
 		Datetime:  b.ISO8601(timestamp),
 		Nonce:     depth.LastUpdateId,
 		Info:      b.depthToMap(depth),

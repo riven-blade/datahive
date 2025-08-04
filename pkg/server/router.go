@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"datahive/pkg/logger"
-	"datahive/pkg/protocol"
+	"datahive/pkg/protocol/pb"
 
 	"go.uber.org/zap"
 )
@@ -28,9 +28,9 @@ type RouterStats struct {
 
 // Router 消息路由器接口
 type Router interface {
-	RegisterHandler(action protocol.ActionType, handler MessageHandler)
-	UnregisterHandler(action protocol.ActionType)
-	RouteMessage(conn Connection, msg *protocol.Message) error
+	RegisterHandler(action pb.ActionType, handler MessageHandler)
+	UnregisterHandler(action pb.ActionType)
+	RouteMessage(conn Connection, msg *pb.Message) error
 	GetStats() *RouterStats
 	GetHandlerCount() int
 }
@@ -38,7 +38,7 @@ type Router interface {
 // StandardRouter 标准消息路由器
 type StandardRouter struct {
 	// 消息处理器映射
-	handlers map[protocol.ActionType]MessageHandler
+	handlers map[pb.ActionType]MessageHandler
 	mu       sync.RWMutex
 
 	// 统计信息和它的互斥锁
@@ -49,7 +49,7 @@ type StandardRouter struct {
 // NewRouter 创建消息路由器
 func NewRouter() Router {
 	return &StandardRouter{
-		handlers: make(map[protocol.ActionType]MessageHandler),
+		handlers: make(map[pb.ActionType]MessageHandler),
 		stats: &RouterStats{
 			HandlerStats: make(map[string]int64),
 		},
@@ -57,7 +57,7 @@ func NewRouter() Router {
 }
 
 // RegisterHandler 注册消息处理器
-func (r *StandardRouter) RegisterHandler(action protocol.ActionType, handler MessageHandler) {
+func (r *StandardRouter) RegisterHandler(action pb.ActionType, handler MessageHandler) {
 	ctx := context.Background()
 
 	r.mu.Lock()
@@ -75,7 +75,7 @@ func (r *StandardRouter) RegisterHandler(action protocol.ActionType, handler Mes
 }
 
 // UnregisterHandler 注销消息处理器
-func (r *StandardRouter) UnregisterHandler(action protocol.ActionType) {
+func (r *StandardRouter) UnregisterHandler(action pb.ActionType) {
 	ctx := context.Background()
 
 	r.mu.Lock()
@@ -93,7 +93,7 @@ func (r *StandardRouter) UnregisterHandler(action protocol.ActionType) {
 }
 
 // RouteMessage 路由消息到对应的处理器
-func (r *StandardRouter) RouteMessage(conn Connection, msg *protocol.Message) error {
+func (r *StandardRouter) RouteMessage(conn Connection, msg *pb.Message) error {
 	ctx := context.Background()
 	startTime := time.Now()
 
@@ -185,36 +185,3 @@ func (r *StandardRouter) GetHandlerCount() int {
 }
 
 // ========== 内置处理器 ==========
-
-// RegisterBuiltinHandlers 注册内置处理器
-func (r *StandardRouter) RegisterBuiltinHandlers() {
-	ctx := context.Background()
-
-	// 注册ping处理器
-	r.RegisterHandler(protocol.ActionPing, func(conn Connection, msg *protocol.Message) error {
-		logger.Ctx(ctx).Debug("Received ping, sending pong",
-			zap.String("remote", conn.GetRemote()))
-
-		pongData := []byte("pong")
-		return conn.SendResponse(protocol.ActionPong, msg.Id, pongData)
-	})
-
-	// 注册pong处理器
-	r.RegisterHandler(protocol.ActionPong, func(conn Connection, msg *protocol.Message) error {
-		logger.Ctx(ctx).Debug("Received pong",
-			zap.String("remote", conn.GetRemote()))
-		return nil
-	})
-
-	// 注册状态处理器
-	r.RegisterHandler(protocol.ActionStatus, func(conn Connection, msg *protocol.Message) error {
-		logger.Ctx(ctx).Debug("Received status request",
-			zap.String("remote", conn.GetRemote()))
-
-		statusData := []byte(fmt.Sprintf(`{"status":"ok","timestamp":%d}`, time.Now().Unix()))
-		return conn.SendResponse(protocol.ActionStatus, msg.Id, statusData)
-	})
-
-	logger.Ctx(ctx).Info("Built-in handlers registered",
-		zap.Int("count", 3))
-}

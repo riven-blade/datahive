@@ -335,42 +335,50 @@ type MarginModeInfo = MarginMode
 
 // ========== WebSocket 相关类型 ==========
 
-// WatchTicker WebSocket Ticker 数据
+// WatchPrice WebSocket 价格数据
+type WatchPrice struct {
+	Price      float64 `json:"price"`       // 价格
+	Symbol     string  `json:"symbol"`      // 交易对
+	TimeStamp  int64   `json:"timestamp"`   // 时间戳
+	StreamName string  `json:"stream_name"` // 频道信息
+}
+
+// WatchTicker WebSocket Ticker 数据 (向后兼容)
 type WatchTicker struct {
 	Ticker
-	Channel string `json:"channel"` // 频道信息
+	StreamName string `json:"stream_name"` // 频道信息
 }
 
 // WatchOrderBook WebSocket 订单簿数据
 type WatchOrderBook struct {
 	OrderBook
-	Channel string `json:"channel"` // 频道信息
+	StreamName string `json:"stream_name"` // 频道信息
 }
 
 // WatchTrade WebSocket 交易数据
 type WatchTrade struct {
 	Trade
-	Channel string `json:"channel"` // 频道信息
+	StreamName string `json:"stream_name"` // 频道信息
 }
 
 // WatchOHLCV WebSocket K线数据
 type WatchOHLCV struct {
 	OHLCV
-	Symbol    string `json:"symbol"`    // 交易对
-	Timeframe string `json:"timeframe"` // 时间周期
-	Channel   string `json:"channel"`   // 频道信息
+	Symbol     string `json:"symbol"`      // 交易对
+	Timeframe  string `json:"timeframe"`   // 时间周期
+	StreamName string `json:"stream_name"` // 频道信息
 }
 
 // WatchBalance WebSocket 余额数据
 type WatchBalance struct {
 	Account
-	Channel string `json:"channel"` // 频道信息
+	StreamName string `json:"stream_name"` // 频道信息
 }
 
 // WatchOrder WebSocket 订单数据
 type WatchOrder struct {
 	Order
-	Channel string `json:"channel"` // 频道信息
+	StreamName string `json:"stream_name"` // 频道信息
 }
 
 // ========== 交易所状态和信息 ==========
@@ -399,7 +407,7 @@ const (
 	MarketTypeFuture     = "future"
 	MarketTypeSwap       = "swap"
 	MarketTypeOption     = "option"
-	MarketTypeDerivative = "derivative" // 添加缺失的常量
+	MarketTypeDerivative = "derivative"
 	MarketTypeContract   = "contract"
 	MarketTypeIndex      = "index"
 )

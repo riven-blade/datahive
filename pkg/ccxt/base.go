@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/spf13/cast"
 )
 
 // ========== 配置和常量 ==========
@@ -28,8 +30,6 @@ type BaseExchange struct {
 	name      string
 	countries []string
 	version   string
-	certified bool
-	pro       bool
 
 	// ========== API 配置 ==========
 	apiKey   string
@@ -44,20 +44,12 @@ type BaseExchange struct {
 	rateLimit       int
 	enableRateLimit bool
 	httpProxy       string
-	httpsProxy      string
-	socksProxy      string
 	userAgent       string
 	headers         map[string]string
 
 	// ========== 精度配置 ==========
 	precisionMode int
 	paddingMode   int
-
-	// ========== 数据存储 ==========
-	markets        map[string]*Market
-	currencies     map[string]*Currency
-	marketsById    map[string]*Market
-	currenciesById map[string]*Currency
 
 	// ========== 功能支持 ==========
 	has        map[string]bool
@@ -85,6 +77,11 @@ type BaseExchange struct {
 
 	// ========== 选项配置 ==========
 	options map[string]interface{}
+
+	// ========== 市场数据缓存 ==========
+	markets       map[string]*Market
+	marketsLoaded bool
+	marketsMutex  sync.RWMutex
 
 	// ========== 同步锁 ==========
 	mutex sync.RWMutex
@@ -291,10 +288,6 @@ func NewBaseExchange(id, name, version string, countries []string) *BaseExchange
 		enableRateLimit: true,
 		userAgent:       "datahive/1.0.0",
 		headers:         make(map[string]string),
-		markets:         make(map[string]*Market),
-		currencies:      make(map[string]*Currency),
-		marketsById:     make(map[string]*Market),
-		currenciesById:  make(map[string]*Currency),
 		has:             make(map[string]bool),
 		timeframes:      make(map[string]string),
 		fees:            make(map[string]map[string]interface{}),
@@ -302,6 +295,8 @@ func NewBaseExchange(id, name, version string, countries []string) *BaseExchange
 		fundingFees:     make(map[string]*Currency),
 		options:         make(map[string]interface{}),
 		httpClient:      &http.Client{Timeout: 30 * time.Second},
+		markets:         make(map[string]*Market),
+		marketsLoaded:   false,
 		maxRetries:      3,
 		retryDelay:      100 * time.Millisecond,
 		maxRetryDelay:   10 * time.Second,
@@ -357,20 +352,20 @@ func (b *BaseExchange) setDefaultTimeframes() {
 
 // ========== 基础信息方法 ==========
 
-func (b *BaseExchange) GetID() string              { return b.id }
-func (b *BaseExchange) GetName() string            { return b.name }
-func (b *BaseExchange) GetCountries() []string     { return b.countries }
-func (b *BaseExchange) GetVersion() string         { return b.version }
-func (b *BaseExchange) GetRateLimit() int          { return b.rateLimit }
-func (b *BaseExchange) GetCertifiedAPIKey() string { return "" } // 子类实现
-func (b *BaseExchange) GetTimeout() int            { return int(b.timeout / time.Second) }
-func (b *BaseExchange) GetSandbox() bool           { return b.sandbox }
-func (b *BaseExchange) GetUserAgent() string       { return b.userAgent }
-func (b *BaseExchange) GetProxy() string           { return b.httpProxy }
-func (b *BaseExchange) GetApiKey() string          { return b.apiKey }
-func (b *BaseExchange) GetSecret() string          { return b.secret }
-func (b *BaseExchange) GetPassword() string        { return b.password }
-func (b *BaseExchange) GetUID() string             { return b.uid }
+func (b *BaseExchange) GetID() string          { return b.id }
+func (b *BaseExchange) GetName() string        { return b.name }
+func (b *BaseExchange) GetCountries() []string { return b.countries }
+func (b *BaseExchange) GetVersion() string     { return b.version }
+func (b *BaseExchange) GetRateLimit() int      { return b.rateLimit }
+
+func (b *BaseExchange) GetTimeout() int      { return int(b.timeout / time.Second) }
+func (b *BaseExchange) GetSandbox() bool     { return b.sandbox }
+func (b *BaseExchange) GetUserAgent() string { return b.userAgent }
+func (b *BaseExchange) GetProxy() string     { return b.httpProxy }
+func (b *BaseExchange) GetApiKey() string    { return b.apiKey }
+func (b *BaseExchange) GetSecret() string    { return b.secret }
+func (b *BaseExchange) GetPassword() string  { return b.password }
+func (b *BaseExchange) GetUID() string       { return b.uid }
 
 // 功能支持检查
 func (b *BaseExchange) Has() map[string]bool {
@@ -411,8 +406,6 @@ func (b *BaseExchange) GetMarketTypes() []string {
 }
 
 // 精度配置
-func (b *BaseExchange) GetPrecisionMode() int { return b.precisionMode }
-func (b *BaseExchange) GetPaddingMode() int   { return b.paddingMode }
 
 // 费率信息
 func (b *BaseExchange) GetTradingFees() map[string]map[string]interface{} {
@@ -605,44 +598,11 @@ func (b *BaseExchange) DecimalToPrecision(x float64, precision int, precisionMod
 	}
 }
 
-func (b *BaseExchange) AmountToPrecision(symbol string, amount float64) float64 {
-	b.mutex.RLock()
-	defer b.mutex.RUnlock()
-
-	if market, exists := b.markets[symbol]; exists {
-		precision := int(market.Precision.Amount)
-		formatted := b.DecimalToPrecision(amount, precision, b.precisionMode, b.paddingMode)
-		if result, err := strconv.ParseFloat(formatted, 64); err == nil {
-			return result
-		}
-	}
-	return amount
-}
-
-func (b *BaseExchange) PriceToPrecision(symbol string, price float64) float64 {
-	b.mutex.RLock()
-	defer b.mutex.RUnlock()
-
-	if market, exists := b.markets[symbol]; exists {
-		precision := int(market.Precision.Price)
-		formatted := b.DecimalToPrecision(price, precision, b.precisionMode, b.paddingMode)
-		if result, err := strconv.ParseFloat(formatted, 64); err == nil {
-			return result
-		}
-	}
-	return price
-}
-
 func (b *BaseExchange) CostToPrecision(symbol string, cost float64) float64 {
-	b.mutex.RLock()
-	defer b.mutex.RUnlock()
-
-	if market, exists := b.markets[symbol]; exists {
-		precision := int(market.Precision.Cost)
-		formatted := b.DecimalToPrecision(cost, precision, b.precisionMode, b.paddingMode)
-		if result, err := strconv.ParseFloat(formatted, 64); err == nil {
-			return result
-		}
+	// 默认精度处理，具体实现由子类重写
+	formatted := b.DecimalToPrecision(cost, 8, b.precisionMode, b.paddingMode)
+	if result, err := strconv.ParseFloat(formatted, 64); err == nil {
+		return result
 	}
 	return cost
 }
@@ -654,20 +614,6 @@ func (b *BaseExchange) FeeToPrecision(currency string, fee float64) float64 {
 		return result
 	}
 	return fee
-}
-
-func (b *BaseExchange) CurrencyToPrecision(currency string, amount float64) float64 {
-	b.mutex.RLock()
-	defer b.mutex.RUnlock()
-
-	if curr, exists := b.currencies[currency]; exists {
-		precision := curr.Precision
-		formatted := b.DecimalToPrecision(amount, precision, b.precisionMode, b.paddingMode)
-		if result, err := strconv.ParseFloat(formatted, 64); err == nil {
-			return result
-		}
-	}
-	return amount
 }
 
 // ========== URL和参数处理 ==========
@@ -696,28 +642,6 @@ func (b *BaseExchange) ExtractParams(path string) (string, map[string]interface{
 	}
 
 	return path, params
-}
-
-// ========== 符号转换 ==========
-
-func (b *BaseExchange) MarketID(symbol string) string {
-	b.mutex.RLock()
-	defer b.mutex.RUnlock()
-
-	if market, exists := b.markets[symbol]; exists {
-		return market.ID
-	}
-	return symbol
-}
-
-func (b *BaseExchange) MarketSymbol(id string) string {
-	b.mutex.RLock()
-	defer b.mutex.RUnlock()
-
-	if market, exists := b.marketsById[id]; exists {
-		return market.Symbol
-	}
-	return id
 }
 
 // ========== HTTP 请求方法 ==========
@@ -783,8 +707,19 @@ func (b *BaseExchange) Request(ctx context.Context, url string, method string, h
 	return response, nil
 }
 
-// RequestWithRetry 发送带重试的HTTP请求
-func (b *BaseExchange) RequestWithRetry(ctx context.Context, url string, method string, headers map[string]string, body string) (*http.Response, error) {
+// Fetch 发送HTTP请求并处理响应
+func (b *BaseExchange) Fetch(ctx context.Context, url, method string, headers map[string]string, body string) (string, error) {
+	resp, err := b.Request(ctx, url, method, headers, body, nil)
+	if err != nil {
+		return "", err
+	}
+
+	// 读取响应体
+	return string(resp.Body), nil
+}
+
+// FetchWithRetry 发送带重试的HTTP请求并处理响应
+func (b *BaseExchange) FetchWithRetry(ctx context.Context, url, method string, headers map[string]string, body string) (string, error) {
 	var resp *Response
 
 	err := b.RetryWithBackoff(ctx, func() error {
@@ -809,54 +744,18 @@ func (b *BaseExchange) RequestWithRetry(ctx context.Context, url string, method 
 		return nil
 	})
 
-	// 转换回http.Response (为了兼容)
-	if resp != nil {
-		httpResp := &http.Response{
-			StatusCode: resp.StatusCode,
-			Header:     make(http.Header),
-		}
-		for k, v := range resp.Headers {
-			httpResp.Header.Set(k, v)
-		}
-		return httpResp, err
-	}
-	return nil, err
-}
-
-// Fetch 发送HTTP请求并处理响应
-func (b *BaseExchange) Fetch(ctx context.Context, url, method string, headers map[string]string, body string) (string, error) {
-	resp, err := b.Request(ctx, url, method, headers, body, nil)
 	if err != nil {
 		return "", err
 	}
 
-	// 读取响应体
+	if resp == nil {
+		return "", NewNetworkError("no response received")
+	}
+
 	return string(resp.Body), nil
 }
 
-// FetchWithRetry 发送带重试的HTTP请求并处理响应
-func (b *BaseExchange) FetchWithRetry(ctx context.Context, url, method string, headers map[string]string, body string) (string, error) {
-
-	resp, err := b.RequestWithRetry(ctx, url, method, headers, body)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	// 读取响应体
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	return string(bodyBytes), nil
-}
-
 // ========== 默认实现方法 (子类可重写) ==========
-
-func (b *BaseExchange) LoadMarkets(ctx context.Context, reload ...bool) (map[string]*Market, error) {
-	return nil, NewNotSupported("LoadMarkets")
-}
 
 func (b *BaseExchange) FetchMarkets(ctx context.Context, params map[string]interface{}) ([]*Market, error) {
 	return nil, NewNotSupported("FetchMarkets")
@@ -1072,113 +971,49 @@ func (b *BaseExchange) FetchFundingHistory(ctx context.Context, symbol string, s
 }
 
 // WebSocket方法的默认实现
-func (b *BaseExchange) WatchTicker(ctx context.Context, symbol string, params map[string]interface{}) (<-chan *WatchTicker, error) {
-	return nil, NewNotSupported("WatchTicker")
+func (b *BaseExchange) WatchPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchPrice, error) {
+	return "", nil, NewNotSupported("WatchPrice")
 }
 
-func (b *BaseExchange) WatchTickers(ctx context.Context, symbols []string, params map[string]interface{}) (<-chan map[string]*WatchTicker, error) {
-	// 默认实现：基于WatchTicker聚合多个ticker
-	if len(symbols) == 0 {
-		return nil, NewInvalidRequest("symbols array cannot be empty")
+func (b *BaseExchange) WatchOrderBook(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchOrderBook, error) {
+	return "", nil, NewNotSupported("WatchOrderBook")
+}
+
+func (b *BaseExchange) WatchTrade(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchTrade, error) {
+	return "", nil, NewNotSupported("WatchTrade")
+}
+
+func (b *BaseExchange) WatchOHLCV(ctx context.Context, symbol, timeframe string, params map[string]interface{}) (string, <-chan *WatchOHLCV, error) {
+	return "", nil, NewNotSupported("WatchOHLCV")
+}
+
+func (b *BaseExchange) WatchBalance(ctx context.Context, params map[string]interface{}) (string, <-chan *WatchBalance, error) {
+	return "", nil, NewNotSupported("WatchBalance")
+}
+
+func (b *BaseExchange) WatchOrders(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchOrder, error) {
+	return "", nil, NewNotSupported("WatchOrders")
+}
+
+// GenerateChannel 生成交易所特定的 WebSocket channel 名称（默认实现）
+func (b *BaseExchange) GenerateChannel(symbol string, params map[string]interface{}) string {
+	normalizedSymbol := strings.ReplaceAll(symbol, "/", "")
+
+	eventType := cast.ToString(params["eventType"])
+	if eventType == "" {
+		eventType = "unknown"
 	}
 
-	// 创建结果channel
-	resultChan := make(chan map[string]*WatchTicker, 1000)
+	base := fmt.Sprintf("%s_%s", normalizedSymbol, eventType)
 
-	// 存储每个symbol的最新ticker
-	tickerMap := make(map[string]*WatchTicker)
-	var tickerMutex sync.RWMutex
-
-	// 为每个symbol启动单独的WatchTicker
-	var wg sync.WaitGroup
-	errorChan := make(chan error, len(symbols))
-
-	for _, symbol := range symbols {
-		wg.Add(1)
-		go func(sym string) {
-			defer wg.Done()
-
-			// 观察单个ticker
-			tickerChan, err := b.WatchTicker(ctx, sym, params)
-			if err != nil {
-				errorChan <- fmt.Errorf("failed to watch ticker for %s: %w", sym, err)
-				return
-			}
-
-			// 监听ticker更新
-			for ticker := range tickerChan {
-				tickerMutex.Lock()
-				tickerMap[sym] = ticker
-
-				// 创建当前所有ticker的副本
-				currentTickers := make(map[string]*WatchTicker)
-				for k, v := range tickerMap {
-					currentTickers[k] = v
-				}
-				tickerMutex.Unlock()
-
-				// 发送更新
-				select {
-				case resultChan <- currentTickers:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}(symbol)
+	if interval := cast.ToString(params["interval"]); interval != "" {
+		base += "_" + interval
+	}
+	if depth := cast.ToInt(params["depth"]); depth > 0 {
+		base += fmt.Sprintf("_%d", depth)
 	}
 
-	// 检查启动错误
-	go func() {
-		wg.Wait()
-		close(errorChan)
-		close(resultChan)
-	}()
-
-	// 检查是否有启动错误
-	select {
-	case err := <-errorChan:
-		if err != nil {
-			return nil, err
-		}
-	case <-time.After(100 * time.Millisecond):
-		// 100ms后没有错误，认为启动成功
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
-	return resultChan, nil
-}
-
-func (b *BaseExchange) WatchOrderBook(ctx context.Context, symbol string, limit int, params map[string]interface{}) (<-chan *WatchOrderBook, error) {
-	return nil, NewNotSupported("WatchOrderBook")
-}
-
-func (b *BaseExchange) WatchOrderBookForSymbols(ctx context.Context, symbols []string, limit int, params map[string]interface{}) (<-chan map[string]*WatchOrderBook, error) {
-	return nil, NewNotSupported("WatchOrderBookForSymbols")
-}
-
-func (b *BaseExchange) WatchTrades(ctx context.Context, symbol string, since int64, limit int, params map[string]interface{}) (<-chan *WatchTrade, error) {
-	return nil, NewNotSupported("WatchTrades")
-}
-
-func (b *BaseExchange) WatchTradesForSymbols(ctx context.Context, symbols []string, since int64, limit int, params map[string]interface{}) (<-chan map[string][]WatchTrade, error) {
-	return nil, NewNotSupported("WatchTradesForSymbols")
-}
-
-func (b *BaseExchange) WatchOHLCV(ctx context.Context, symbol, timeframe string, since int64, limit int, params map[string]interface{}) (<-chan *WatchOHLCV, error) {
-	return nil, NewNotSupported("WatchOHLCV")
-}
-
-func (b *BaseExchange) WatchBalance(ctx context.Context, params map[string]interface{}) (<-chan *WatchBalance, error) {
-	return nil, NewNotSupported("WatchBalance")
-}
-
-func (b *BaseExchange) WatchOrders(ctx context.Context, symbol string, since int64, limit int, params map[string]interface{}) (<-chan *WatchOrder, error) {
-	return nil, NewNotSupported("WatchOrders")
-}
-
-func (b *BaseExchange) WatchMyTrades(ctx context.Context, symbol string, since int64, limit int, params map[string]interface{}) (<-chan []WatchTrade, error) {
-	return nil, NewNotSupported("WatchMyTrades")
+	return base
 }
 
 // 交易所特定方法的默认实现
@@ -1286,46 +1121,118 @@ func (b *BaseExchange) SetFees(fees map[string]map[string]interface{}) {
 	b.fees = fees
 }
 
-// SetMarkets 设置市场信息
-func (b *BaseExchange) SetMarkets(markets map[string]*Market) {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
+// ========== 市场管理方法 ==========
+
+// LoadMarketsIfNeeded 按需加载市场数据
+func (b *BaseExchange) LoadMarketsIfNeeded(ctx context.Context) error {
+	b.marketsMutex.RLock()
+	if b.marketsLoaded && b.markets != nil {
+		b.marketsMutex.RUnlock()
+		return nil
+	}
+	b.marketsMutex.RUnlock()
+
+	b.marketsMutex.Lock()
+	defer b.marketsMutex.Unlock()
+
+	// 双重检查
+	if b.marketsLoaded && b.markets != nil {
+		return nil
+	}
+
+	// 获取市场数据
+	marketsList, err := b.FetchMarkets(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	// 构建市场映射
+	markets := make(map[string]*Market)
+	for _, market := range marketsList {
+		markets[market.Symbol] = market
+		// 同时支持通过ID查找
+		if market.ID != market.Symbol {
+			markets[market.ID] = market
+		}
+	}
+
 	b.markets = markets
-	// 同时更新索引
-	b.marketsById = make(map[string]*Market)
-	for _, market := range markets {
-		b.marketsById[market.ID] = market
+	b.marketsLoaded = true
+	return nil
+}
+
+// GetMarket 根据symbol获取市场信息
+func (b *BaseExchange) GetMarket(symbol string) (*Market, error) {
+	b.marketsMutex.RLock()
+	defer b.marketsMutex.RUnlock()
+
+	if b.markets == nil {
+		return nil, NewMarketNotFound(symbol)
+	}
+
+	market, exists := b.markets[symbol]
+	if !exists {
+		return nil, NewMarketNotFound(symbol)
+	}
+
+	return market, nil
+}
+
+// FindMarketByID 根据交易对ID查找市场信息
+func (b *BaseExchange) FindMarketByID(id string) *Market {
+	b.marketsMutex.RLock()
+	defer b.marketsMutex.RUnlock()
+
+	if b.markets == nil {
+		return nil
+	}
+
+	// 先尝试直接匹配ID
+	if market, exists := b.markets[id]; exists {
+		return market
+	}
+
+	// 遍历查找匹配的ID
+	for _, market := range b.markets {
+		if market.ID == id {
+			return market
+		}
+	}
+
+	return nil
+}
+
+// GetMarkets 获取所有市场信息
+func (b *BaseExchange) GetMarkets() map[string]*Market {
+	b.marketsMutex.RLock()
+	defer b.marketsMutex.RUnlock()
+
+	result := make(map[string]*Market)
+	for k, v := range b.markets {
+		result[k] = v
+	}
+	return result
+}
+
+// SetMarkets 设置市场数据
+func (b *BaseExchange) SetMarkets(markets map[string]*Market) {
+	b.marketsMutex.Lock()
+	defer b.marketsMutex.Unlock()
+
+	if markets == nil {
+		b.markets = make(map[string]*Market)
+		b.marketsLoaded = false
+	} else {
+		b.markets = markets
+		b.marketsLoaded = true
 	}
 }
 
-// GetMarkets 获取市场信息
-func (b *BaseExchange) GetMarkets() map[string]*Market {
-	b.mutex.RLock()
-	defer b.mutex.RUnlock()
-	return b.markets
-}
+// ClearMarketsCache 清除市场缓存
+func (b *BaseExchange) ClearMarketsCache() {
+	b.marketsMutex.Lock()
+	defer b.marketsMutex.Unlock()
 
-// ParseBalance 解析余额数据
-func (b *BaseExchange) ParseBalance(response map[string]interface{}) (*Account, error) {
-	return nil, NewNotSupported("ParseBalance")
-}
-
-// ParseOHLCV 解析OHLCV数据
-func (b *BaseExchange) ParseOHLCV(ohlcv []interface{}, market *Market, timeframe string) (*OHLCV, error) {
-	return nil, NewNotSupported("ParseOHLCV")
-}
-
-// ParseTicker 解析Ticker数据
-func (b *BaseExchange) ParseTicker(ticker map[string]interface{}, market *Market) (*Ticker, error) {
-	return nil, NewNotSupported("ParseTicker")
-}
-
-// ParseTrade 解析Trade数据
-func (b *BaseExchange) ParseTrade(trade map[string]interface{}, market *Market) (*Trade, error) {
-	return nil, NewNotSupported("ParseTrade")
-}
-
-// ParseOrder 解析Order数据
-func (b *BaseExchange) ParseOrder(order map[string]interface{}, market *Market) (*Order, error) {
-	return nil, NewNotSupported("ParseOrder")
+	b.markets = make(map[string]*Market)
+	b.marketsLoaded = false
 }

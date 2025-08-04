@@ -166,20 +166,46 @@ func (ws *WebSocketConnection) messageLoop() {
 	}
 }
 
+// ParsedMessage 预解析的消息结构
+type ParsedMessage struct {
+	Raw    []byte
+	Parsed map[string]interface{}
+	Error  error
+}
+
 // handleMessage 处理接收到的消息
 func (ws *WebSocketConnection) handleMessage(message []byte) {
-	// 简单的消息分发，实际实现可能需要根据消息类型分发
-	var msg map[string]interface{}
-	if err := json.Unmarshal(message, &msg); err != nil {
+	// 预解析消息，避免重复解析
+	parsedMsg := &ParsedMessage{
+		Raw: message,
+	}
+
+	if err := json.Unmarshal(message, &parsedMsg.Parsed); err != nil {
+		parsedMsg.Error = err
+	}
+
+	// 优先使用"all"处理器，传递预解析的消息
+	if handler, exists := ws.messageHandlers["all"]; exists {
+		if err := handler(message); err != nil && ws.errorHandler != nil {
+			ws.errorHandler(err)
+		}
+		return
+	}
+
+	// 如果JSON解析失败，报错并返回
+	if parsedMsg.Error != nil {
 		if ws.errorHandler != nil {
-			ws.errorHandler(fmt.Errorf("failed to parse message: %w", err))
+			ws.errorHandler(fmt.Errorf("failed to parse message: %w", parsedMsg.Error))
 		}
 		return
 	}
 
 	// 查找对应的处理器
 	for topic, handler := range ws.messageHandlers {
-		if channel, ok := msg["channel"].(string); ok && channel == topic {
+		if topic == "all" {
+			continue // 已经在上面处理了
+		}
+		if channel, ok := parsedMsg.Parsed["channel"].(string); ok && channel == topic {
 			if err := handler(message); err != nil && ws.errorHandler != nil {
 				ws.errorHandler(err)
 			}
@@ -218,7 +244,6 @@ func (ws *WebSocketConnection) Subscribe(topic string, handler func([]byte) erro
 
 	ws.messageHandlers[topic] = handler
 
-	// 发送订阅消息（具体格式由交易所决定）
 	subscribeMsg := map[string]interface{}{
 		"method": "subscribe",
 		"params": map[string]interface{}{
@@ -227,6 +252,13 @@ func (ws *WebSocketConnection) Subscribe(topic string, handler func([]byte) erro
 	}
 
 	return ws.SendMessage(subscribeMsg)
+}
+
+// SetSubscribeHandler 设置订阅处理器
+func (ws *WebSocketConnection) SetSubscribeHandler(topic string, handler func([]byte) error) {
+	ws.mutex.Lock()
+	defer ws.mutex.Unlock()
+	ws.messageHandlers[topic] = handler
 }
 
 // SendMessage 发送消息
@@ -259,45 +291,4 @@ func (ws *WebSocketConnection) Close() error {
 	}
 
 	return nil
-}
-
-// ========== WebSocket 数据类型 ==========
-
-// WebSocketMessage WebSocket消息基础结构
-type WebSocketMessage struct {
-	Channel   string      `json:"channel"`
-	Type      string      `json:"type"`
-	Data      interface{} `json:"data"`
-	Timestamp int64       `json:"timestamp"`
-}
-
-// ========== 实时数据频道定义 ==========
-
-const (
-	ChannelTicker    = "ticker"
-	ChannelOrderBook = "orderbook"
-	ChannelTrades    = "trades"
-	ChannelKlines    = "klines"
-
-	ChannelBalance   = "balance"
-	ChannelOrders    = "orders"
-	ChannelPositions = "positions"
-)
-
-// ========== WebSocket 接口扩展 ==========
-
-// WebSocketClient WebSocket客户端接口
-type WebSocketClient interface {
-	Connect(ctx context.Context) error
-	Disconnect() error
-	IsConnected() bool
-
-	Subscribe(channel string, symbol string) error
-	Unsubscribe(channel string, symbol string) error
-
-	OnTicker(handler func(*WatchTicker) error)
-	OnOrderBook(handler func(*WatchOrderBook) error)
-	OnTrades(handler func([]WatchTrade) error)
-	OnBalance(handler func(*WatchBalance) error)
-	OnOrders(handler func([]WatchOrder) error)
 }

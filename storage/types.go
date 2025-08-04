@@ -1,9 +1,10 @@
 package storage
 
 import (
-	"datahive/pkg/ccxt"
-	"datahive/pkg/protocol"
 	"time"
+
+	"datahive/pkg/ccxt"
+	"datahive/pkg/protocol/pb"
 )
 
 // TypeConverter 类型转换器，处理protocol和ccxt类型之间的转换
@@ -15,12 +16,12 @@ func NewTypeConverter() *TypeConverter {
 }
 
 // CCXTTickerToProtocol 将CCXT Ticker转换为Protocol Ticker
-func (tc *TypeConverter) CCXTTickerToProtocol(exchange string, ticker *ccxt.Ticker) *protocol.Ticker {
+func (tc *TypeConverter) CCXTTickerToProtocol(exchange string, ticker *ccxt.Ticker) *pb.Ticker {
 	if ticker == nil {
 		return nil
 	}
 
-	return &protocol.Ticker{
+	return &pb.Ticker{
 		Symbol:        ticker.Symbol,
 		Timestamp:     ticker.TimeStamp,
 		Last:          ticker.Last,
@@ -37,7 +38,7 @@ func (tc *TypeConverter) CCXTTickerToProtocol(exchange string, ticker *ccxt.Tick
 }
 
 // ProtocolTickerToCCXT 将Protocol Ticker转换为CCXT Ticker
-func (tc *TypeConverter) ProtocolTickerToCCXT(ticker *protocol.Ticker) *ccxt.Ticker {
+func (tc *TypeConverter) ProtocolTickerToCCXT(ticker *pb.Ticker) *ccxt.Ticker {
 	if ticker == nil {
 		return nil
 	}
@@ -60,12 +61,12 @@ func (tc *TypeConverter) ProtocolTickerToCCXT(ticker *protocol.Ticker) *ccxt.Tic
 }
 
 // CCXTOHLCVToProtocolKline 将CCXT OHLCV转换为Protocol Kline
-func (tc *TypeConverter) CCXTOHLCVToProtocolKline(exchange, symbol, timeframe string, ohlcv *ccxt.OHLCV) *protocol.Kline {
+func (tc *TypeConverter) CCXTOHLCVToProtocolKline(exchange, symbol, timeframe string, ohlcv *ccxt.OHLCV) *pb.Kline {
 	if ohlcv == nil {
 		return nil
 	}
 
-	return &protocol.Kline{
+	return &pb.Kline{
 		Symbol:    symbol,
 		Exchange:  exchange,
 		Timeframe: timeframe,
@@ -80,7 +81,7 @@ func (tc *TypeConverter) CCXTOHLCVToProtocolKline(exchange, symbol, timeframe st
 }
 
 // ProtocolKlineToCCXTOHLCV 将Protocol Kline转换为CCXT OHLCV
-func (tc *TypeConverter) ProtocolKlineToCCXTOHLCV(kline *protocol.Kline) *ccxt.OHLCV {
+func (tc *TypeConverter) ProtocolKlineToCCXTOHLCV(kline *pb.Kline) *ccxt.OHLCV {
 	if kline == nil {
 		return nil
 	}
@@ -96,12 +97,12 @@ func (tc *TypeConverter) ProtocolKlineToCCXTOHLCV(kline *protocol.Kline) *ccxt.O
 }
 
 // CCXTTradeToProtocol 将CCXT Trade转换为Protocol Trade
-func (tc *TypeConverter) CCXTTradeToProtocol(exchange string, trade *ccxt.Trade) *protocol.Trade {
+func (tc *TypeConverter) CCXTTradeToProtocol(exchange string, trade *ccxt.Trade) *pb.Trade {
 	if trade == nil {
 		return nil
 	}
 
-	return &protocol.Trade{
+	return &pb.Trade{
 		Id:        trade.ID,
 		Symbol:    trade.Symbol,
 		Exchange:  exchange,
@@ -113,7 +114,7 @@ func (tc *TypeConverter) CCXTTradeToProtocol(exchange string, trade *ccxt.Trade)
 }
 
 // ProtocolTradeToCCXT 将Protocol Trade转换为CCXT Trade
-func (tc *TypeConverter) ProtocolTradeToCCXT(trade *protocol.Trade) *ccxt.Trade {
+func (tc *TypeConverter) ProtocolTradeToCCXT(trade *pb.Trade) *ccxt.Trade {
 	if trade == nil {
 		return nil
 	}
@@ -130,30 +131,30 @@ func (tc *TypeConverter) ProtocolTradeToCCXT(trade *protocol.Trade) *ccxt.Trade 
 }
 
 // CCXTOrderBookToProtocol 将CCXT OrderBook转换为Protocol OrderBook
-func (tc *TypeConverter) CCXTOrderBookToProtocol(exchange string, orderBook *ccxt.OrderBook) *protocol.OrderBook {
+func (tc *TypeConverter) CCXTOrderBookToProtocol(exchange string, orderBook *ccxt.OrderBook) *pb.OrderBook {
 	if orderBook == nil {
 		return nil
 	}
 
 	// 转换买单
-	bids := make([]*protocol.PriceLevel, 0, len(orderBook.Bids.Price))
+	bids := make([]*pb.PriceLevel, 0, len(orderBook.Bids.Price))
 	for i := 0; i < len(orderBook.Bids.Price) && i < len(orderBook.Bids.Size); i++ {
-		bids = append(bids, &protocol.PriceLevel{
+		bids = append(bids, &pb.PriceLevel{
 			Price:    orderBook.Bids.Price[i],
 			Quantity: orderBook.Bids.Size[i],
 		})
 	}
 
 	// 转换卖单
-	asks := make([]*protocol.PriceLevel, 0, len(orderBook.Asks.Price))
+	asks := make([]*pb.PriceLevel, 0, len(orderBook.Asks.Price))
 	for i := 0; i < len(orderBook.Asks.Price) && i < len(orderBook.Asks.Size); i++ {
-		asks = append(asks, &protocol.PriceLevel{
+		asks = append(asks, &pb.PriceLevel{
 			Price:    orderBook.Asks.Price[i],
 			Quantity: orderBook.Asks.Size[i],
 		})
 	}
 
-	return &protocol.OrderBook{
+	return &pb.OrderBook{
 		Symbol:    orderBook.Symbol,
 		Timestamp: orderBook.TimeStamp,
 		Bids:      bids,
@@ -162,7 +163,7 @@ func (tc *TypeConverter) CCXTOrderBookToProtocol(exchange string, orderBook *ccx
 }
 
 // ProtocolOrderBookToCCXT 将Protocol OrderBook转换为CCXT OrderBook
-func (tc *TypeConverter) ProtocolOrderBookToCCXT(orderBook *protocol.OrderBook) *ccxt.OrderBook {
+func (tc *TypeConverter) ProtocolOrderBookToCCXT(orderBook *pb.OrderBook) *ccxt.OrderBook {
 	if orderBook == nil {
 		return nil
 	}
@@ -193,12 +194,12 @@ func (tc *TypeConverter) ProtocolOrderBookToCCXT(orderBook *protocol.OrderBook) 
 }
 
 // BatchConvertCCXTTickers 批量转换CCXT Ticker
-func (tc *TypeConverter) BatchConvertCCXTTickers(exchange string, tickers []*ccxt.Ticker) []*protocol.Ticker {
+func (tc *TypeConverter) BatchConvertCCXTTickers(exchange string, tickers []*ccxt.Ticker) []*pb.Ticker {
 	if len(tickers) == 0 {
 		return nil
 	}
 
-	result := make([]*protocol.Ticker, 0, len(tickers))
+	result := make([]*pb.Ticker, 0, len(tickers))
 	for _, ticker := range tickers {
 		if converted := tc.CCXTTickerToProtocol(exchange, ticker); converted != nil {
 			result = append(result, converted)
@@ -208,12 +209,12 @@ func (tc *TypeConverter) BatchConvertCCXTTickers(exchange string, tickers []*ccx
 }
 
 // BatchConvertCCXTOHLCVs 批量转换CCXT OHLCV
-func (tc *TypeConverter) BatchConvertCCXTOHLCVs(exchange, symbol, timeframe string, ohlcvs []*ccxt.OHLCV) []*protocol.Kline {
+func (tc *TypeConverter) BatchConvertCCXTOHLCVs(exchange, symbol, timeframe string, ohlcvs []*ccxt.OHLCV) []*pb.Kline {
 	if len(ohlcvs) == 0 {
 		return nil
 	}
 
-	result := make([]*protocol.Kline, 0, len(ohlcvs))
+	result := make([]*pb.Kline, 0, len(ohlcvs))
 	for _, ohlcv := range ohlcvs {
 		if converted := tc.CCXTOHLCVToProtocolKline(exchange, symbol, timeframe, ohlcv); converted != nil {
 			result = append(result, converted)
@@ -223,12 +224,12 @@ func (tc *TypeConverter) BatchConvertCCXTOHLCVs(exchange, symbol, timeframe stri
 }
 
 // BatchConvertCCXTTrades 批量转换CCXT Trade
-func (tc *TypeConverter) BatchConvertCCXTTrades(exchange string, trades []*ccxt.Trade) []*protocol.Trade {
+func (tc *TypeConverter) BatchConvertCCXTTrades(exchange string, trades []*ccxt.Trade) []*pb.Trade {
 	if len(trades) == 0 {
 		return nil
 	}
 
-	result := make([]*protocol.Trade, 0, len(trades))
+	result := make([]*pb.Trade, 0, len(trades))
 	for _, trade := range trades {
 		if converted := tc.CCXTTradeToProtocol(exchange, trade); converted != nil {
 			result = append(result, converted)
@@ -238,7 +239,7 @@ func (tc *TypeConverter) BatchConvertCCXTTrades(exchange string, trades []*ccxt.
 }
 
 // ValidateTickerData 验证Ticker数据的有效性
-func (tc *TypeConverter) ValidateTickerData(ticker *protocol.Ticker) error {
+func (tc *TypeConverter) ValidateTickerData(ticker *pb.Ticker) error {
 	if ticker == nil {
 		return ErrInvalidData("ticker is nil")
 	}
@@ -258,7 +259,7 @@ func (tc *TypeConverter) ValidateTickerData(ticker *protocol.Ticker) error {
 }
 
 // ValidateKlineData 验证Kline数据的有效性
-func (tc *TypeConverter) ValidateKlineData(kline *protocol.Kline) error {
+func (tc *TypeConverter) ValidateKlineData(kline *pb.Kline) error {
 	if kline == nil {
 		return ErrInvalidData("kline is nil")
 	}
@@ -287,7 +288,7 @@ func (tc *TypeConverter) ValidateKlineData(kline *protocol.Kline) error {
 }
 
 // ValidateTradeData 验证Trade数据的有效性
-func (tc *TypeConverter) ValidateTradeData(trade *protocol.Trade) error {
+func (tc *TypeConverter) ValidateTradeData(trade *pb.Trade) error {
 	if trade == nil {
 		return ErrInvalidData("trade is nil")
 	}

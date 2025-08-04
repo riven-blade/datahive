@@ -2,751 +2,815 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
 	"datahive/pkg/ccxt"
 	"datahive/pkg/logger"
-	"datahive/pkg/protocol"
+	"datahive/pkg/protocol/pb"
 
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
+// DataHiveClient DataHive客户端接口
 type DataHiveClient interface {
-	FetchMarkets(ctx context.Context, exchange string, reload ...bool) (map[string]*ccxt.Market, error)
-	FetchTicker(ctx context.Context, exchange, symbol string) (*ccxt.Ticker, error)
-	FetchTickers(ctx context.Context, exchange string, symbols ...string) (map[string]*ccxt.Ticker, error)
-	FetchOHLCV(ctx context.Context, exchange, symbol, timeframe string, since int64, limit int32) ([]*ccxt.OHLCV, error)
-	FetchTrades(ctx context.Context, exchange, symbol string, since int64, limit int32) ([]*ccxt.Trade, error)
-	FetchOrderBook(ctx context.Context, exchange, symbol string, limit int32) (*ccxt.OrderBook, error)
-
-	WatchTicker(ctx context.Context, exchange, marketType, symbol string, callback func(*ccxt.Ticker)) (string, error)
-	WatchTickers(ctx context.Context, exchange, marketType string, symbols []string, callback func(map[string]*ccxt.Ticker)) (string, error)
-	WatchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string, callback func(*ccxt.OHLCV)) (string, error)
-	WatchTrades(ctx context.Context, exchange, marketType, symbol string, callback func([]*ccxt.Trade)) (string, error)
-	WatchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32, callback func(*ccxt.OrderBook)) (string, error)
-
-	Unwatch(subscriptionID string) error
-
+	// 连接管理
 	Connect(address string) error
 	Disconnect() error
 	IsConnected() bool
-}
 
-// exchangeClient 交易所客户端实现
-type exchangeClient struct {
-	client        Client
-	subscriptions map[string]*subscription
-	subMutex      sync.RWMutex
-	connected     bool
-	connMutex     sync.RWMutex
+	// 获取数据 (RESTful)
+	FetchMarkets(ctx context.Context, exchange, marketType, stackType string, reload ...bool) (map[string]*ccxt.Market, error)
+	FetchTicker(ctx context.Context, exchange, marketType, symbol string) (*ccxt.Ticker, error)
+	FetchTickers(ctx context.Context, exchange, marketType string, symbols ...string) (map[string]*ccxt.Ticker, error)
+	FetchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string, since int64, limit int32) ([]*ccxt.OHLCV, error)
+	FetchTrades(ctx context.Context, exchange, marketType, symbol string, since int64, limit int32) ([]*ccxt.Trade, error)
+	FetchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (*ccxt.OrderBook, error)
+
+	// 实时订阅 (WebSocket)
+	WatchPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *ccxt.WatchPrice, string, error)
+	WatchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string) (<-chan *ccxt.OHLCV, string, error)
+	WatchTrades(ctx context.Context, exchange, marketType, symbol string) (<-chan *ccxt.Trade, string, error)
+	WatchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (<-chan *ccxt.OrderBook, string, error)
+	Unwatch(subscriptionID string) error
+
+	// 状态和错误处理
+	SetErrorHandler(handler func(error))
+	GetStats() *ClientStats
 }
 
 // subscription 订阅信息
 type subscription struct {
-	ID          string
-	Type        string // ticker, tickers, ohlcv, trades, orderbook
-	Exchange    string
-	Symbol      string
-	Symbols     []string
-	Timeframe   string
-	Limit       int32
-	TickerCB    func(*ccxt.Ticker)
-	TickersCB   func(map[string]*ccxt.Ticker)
-	OHLCVCB     func(*ccxt.OHLCV)
-	TradesCB    func([]*ccxt.Trade)
-	OrderBookCB func(*ccxt.OrderBook)
-	ctx         context.Context
-	cancel      context.CancelFunc
+	ID       string
+	Type     string // price, ohlcv, trades, orderbook
+	Exchange string
+	Symbol   string
+
+	// Channels
+	PriceCh     chan *ccxt.WatchPrice
+	OHLCVCh     chan *ccxt.OHLCV
+	TradesCh    chan *ccxt.Trade
+	OrderBookCh chan *ccxt.OrderBook
+
+	// 生命周期
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
-// NewDataHiveClient 创建新的交易所客户端
+// dataHiveClient DataHive客户端实现
+type dataHiveClient struct {
+	client Client
+	logger *logger.MLogger
+
+	// 订阅管理
+	subscriptions map[string]*subscription
+	subMutex      sync.RWMutex
+
+	// 错误处理
+	errorHandler func(error)
+	errorMu      sync.RWMutex
+}
+
+// NewDataHiveClient 创建新的DataHive客户端
 func NewDataHiveClient(client Client) DataHiveClient {
-	ec := &exchangeClient{
+	dhClient := &dataHiveClient{
 		client:        client,
+		logger:        &logger.MLogger{Logger: logger.L()},
 		subscriptions: make(map[string]*subscription),
 	}
 
-	// 注册推送消息处理器
-	client.RegisterHandler(protocol.ActionTickerUpdate, func(msg *protocol.Message) error {
-		return ec.handleTickerUpdate(msg.Payload)
-	})
-	client.RegisterHandler(protocol.ActionTickerUpdate, func(msg *protocol.Message) error {
-		return ec.handleTickersUpdate(msg.Payload)
-	})
-	client.RegisterHandler(protocol.ActionKlineUpdate, func(msg *protocol.Message) error {
-		return ec.handleOHLCVUpdate(msg.Payload)
-	})
-	client.RegisterHandler(protocol.ActionTradeUpdate, func(msg *protocol.Message) error {
-		return ec.handleTradesUpdate(msg.Payload)
-	})
-	client.RegisterHandler(protocol.ActionOrderBookUpdate, func(msg *protocol.Message) error {
-		return ec.handleOrderBookUpdate(msg.Payload)
-	})
+	// 注册消息处理器
+	dhClient.registerHandlers()
 
-	return ec
+	return dhClient
 }
 
 // Connect 连接到服务器
-func (ec *exchangeClient) Connect(address string) error {
-	ctx := context.Background()
-
-	ec.connMutex.Lock()
-	defer ec.connMutex.Unlock()
-
-	if err := ec.client.Connect(address); err != nil {
-		return fmt.Errorf("failed to connect to server: %w", err)
-	}
-
-	ec.connected = true
-	logger.Ctx(ctx).Info("✅ Exchange client connected to server")
-	return nil
+func (c *dataHiveClient) Connect(address string) error {
+	return c.client.Connect(address)
 }
 
 // Disconnect 断开连接
-func (ec *exchangeClient) Disconnect() error {
-	ctx := context.Background()
-
-	ec.connMutex.Lock()
-	defer ec.connMutex.Unlock()
-
+func (c *dataHiveClient) Disconnect() error {
 	// 取消所有订阅
-	ec.subMutex.Lock()
-	for id, sub := range ec.subscriptions {
-		if sub.cancel != nil {
-			sub.cancel()
-		}
-		delete(ec.subscriptions, id)
+	c.subMutex.Lock()
+	for id, sub := range c.subscriptions {
+		c.closeSubscription(sub)
+		delete(c.subscriptions, id)
 	}
-	ec.subMutex.Unlock()
+	c.subMutex.Unlock()
 
-	if err := ec.client.Disconnect(); err != nil {
-		return err
-	}
-
-	ec.connected = false
-	logger.Ctx(ctx).Info("Exchange client disconnected from server")
-	return nil
+	return c.client.Disconnect()
 }
 
 // IsConnected 检查连接状态
-func (ec *exchangeClient) IsConnected() bool {
-	ec.connMutex.RLock()
-	defer ec.connMutex.RUnlock()
-	return ec.connected
+func (c *dataHiveClient) IsConnected() bool {
+	return c.client.IsConnected()
 }
 
-// === Fetch接口实现 ===
+// SetErrorHandler 设置错误处理器
+func (c *dataHiveClient) SetErrorHandler(handler func(error)) {
+	c.errorMu.Lock()
+	defer c.errorMu.Unlock()
+	c.errorHandler = handler
+}
 
-// FetchMarkets 获取市场列表
-func (ec *exchangeClient) FetchMarkets(ctx context.Context, exchange string, reload ...bool) (map[string]*ccxt.Market, error) {
-	req := &protocol.FetchMarketsRequest{
-		Exchange: exchange,
-		// MarketType可以根据需要设置
+// GetStats 获取统计信息
+func (c *dataHiveClient) GetStats() *ClientStats {
+	return c.client.GetStats()
+}
+
+// =============================================================================
+// Fetch Methods (RESTful API)
+// =============================================================================
+
+// FetchMarkets 获取市场信息
+func (c *dataHiveClient) FetchMarkets(ctx context.Context, exchange, marketType, stackType string, reload ...bool) (map[string]*ccxt.Market, error) {
+	req := &pb.FetchMarketsRequest{
+		Exchange:   exchange,
+		MarketType: marketType,
+		StackType:  stackType,
 	}
 
-	respData, err := ec.sendRequest(ctx, protocol.ActionFetchMarkets, req)
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_FETCH_MARKETS, data, 30*time.Second)
 	if err != nil {
 		return nil, err
 	}
 
-	var resp protocol.FetchMarketsResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
+	var marketsResp pb.FetchMarketsResponse
+	if err := proto.Unmarshal(resp.Data, &marketsResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	// 转换为map格式
 	markets := make(map[string]*ccxt.Market)
-	for _, market := range resp.Markets {
-		ccxtMarket := &ccxt.Market{
-			ID:      market.Id,
-			Symbol:  market.Symbol,
-			Base:    market.Base,
-			Quote:   market.Quote,
-			Active:  market.Active,
-			Type:    market.Type,
-			Spot:    market.Spot,
-			Future:  market.Futures,
-			Swap:    market.Swap,
-			Linear:  market.Linear,
-			Inverse: market.Inverse,
-			Maker:   market.MakerFee,
-			Taker:   market.TakerFee,
-		}
-		markets[market.Symbol] = ccxtMarket
+	for _, market := range marketsResp.Markets {
+		markets[market.Symbol] = c.convertMarket(market)
 	}
 
 	return markets, nil
 }
 
 // FetchTicker 获取单个ticker
-func (ec *exchangeClient) FetchTicker(ctx context.Context, exchange, symbol string) (*ccxt.Ticker, error) {
-	req := &protocol.FetchTickerRequest{
-		Exchange: exchange,
-		Symbol:   symbol,
+func (c *dataHiveClient) FetchTicker(ctx context.Context, exchange, marketType, symbol string) (*ccxt.Ticker, error) {
+	req := &pb.FetchTickerRequest{
+		Exchange:   exchange,
+		MarketType: marketType,
+		Symbol:     symbol,
 	}
 
-	respData, err := ec.sendRequest(ctx, protocol.ActionFetchTicker, req)
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_FETCH_TICKER, data, 30*time.Second)
 	if err != nil {
 		return nil, err
 	}
 
-	var ticker protocol.Ticker
-	if err := json.Unmarshal(respData, &ticker); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal ticker: %w", err)
-	}
-
-	return ec.convertTicker(&ticker), nil
-}
-
-// FetchTickers 获取多个ticker
-func (ec *exchangeClient) FetchTickers(ctx context.Context, exchange string, symbols ...string) (map[string]*ccxt.Ticker, error) {
-	// 新协议中没有FetchTickersRequest，改用FetchTickerRequest逐个获取
-	if len(symbols) == 0 {
-		return nil, fmt.Errorf("symbols cannot be empty")
-	}
-
-	// 暂时只获取第一个symbol的ticker
-	req := &protocol.FetchTickerRequest{
-		Exchange: exchange,
-		Symbol:   symbols[0],
-	}
-
-	respData, err := ec.sendRequest(ctx, protocol.ActionFetchTicker, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp protocol.FetchTickerResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
+	var tickerResp pb.FetchTickerResponse
+	if err := proto.Unmarshal(resp.Data, &tickerResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
+	return c.convertTicker(tickerResp.Ticker), nil
+}
+
+// FetchTickers 获取多个tickers
+func (c *dataHiveClient) FetchTickers(ctx context.Context, exchange, marketType string, symbols ...string) (map[string]*ccxt.Ticker, error) {
+	if len(symbols) == 0 {
+		return nil, fmt.Errorf("at least one symbol is required")
+	}
+
 	tickers := make(map[string]*ccxt.Ticker)
-	// 只返回单个ticker
-	tickers[resp.Ticker.Symbol] = ec.convertTicker(resp.Ticker)
+
+	// 现在单独处理每个symbol
+	for _, symbol := range symbols {
+		req := &pb.FetchTickersRequest{
+			Exchange:   exchange,
+			MarketType: marketType,
+			Symbol:     symbol,
+		}
+
+		data, err := proto.Marshal(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request for %s: %w", symbol, err)
+		}
+
+		resp, err := c.client.SendRequestWithTimeout(pb.ActionType_FETCH_TICKERS, data, 30*time.Second)
+		if err != nil {
+			return nil, err
+		}
+
+		var tickersResp pb.FetchTickersResponse
+		if err := proto.Unmarshal(resp.Data, &tickersResp); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal response for %s: %w", symbol, err)
+		}
+
+		tickers[tickersResp.Ticker.Symbol] = c.convertTicker(tickersResp.Ticker)
+	}
 
 	return tickers, nil
 }
 
 // FetchOHLCV 获取K线数据
-func (ec *exchangeClient) FetchOHLCV(ctx context.Context, exchange, symbol, timeframe string, since int64, limit int32) ([]*ccxt.OHLCV, error) {
-	req := &protocol.FetchKlinesRequest{
-		Exchange:  exchange,
-		Symbol:    symbol,
-		Interval:  timeframe,
-		StartTime: since,
-		Limit:     limit,
+func (c *dataHiveClient) FetchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string, since int64, limit int32) ([]*ccxt.OHLCV, error) {
+	req := &pb.FetchKlinesRequest{
+		Exchange:   exchange,
+		MarketType: marketType,
+		Symbol:     symbol,
+		Interval:   timeframe,
+		StartTime:  since,
+		Limit:      limit,
 	}
 
-	respData, err := ec.sendRequest(ctx, protocol.ActionFetchKlines, req)
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_FETCH_KLINES, data, 30*time.Second)
 	if err != nil {
 		return nil, err
 	}
 
-	var resp protocol.FetchKlinesResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
+	var klinesResp pb.FetchKlinesResponse
+	if err := proto.Unmarshal(resp.Data, &klinesResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
 	var ohlcvs []*ccxt.OHLCV
-	for _, kline := range resp.Klines {
-		ohlcv := &ccxt.OHLCV{
-			Timestamp: kline.OpenTime,
-			Open:      kline.Open,
-			High:      kline.High,
-			Low:       kline.Low,
-			Close:     kline.Close,
-			Volume:    kline.Volume,
-		}
-		ohlcvs = append(ohlcvs, ohlcv)
+	for _, kline := range klinesResp.Klines {
+		ohlcvs = append(ohlcvs, c.convertKlineToOHLCV(kline))
 	}
 
 	return ohlcvs, nil
 }
 
-// FetchTrades 获取交易记录
-func (ec *exchangeClient) FetchTrades(ctx context.Context, exchange, symbol string, since int64, limit int32) ([]*ccxt.Trade, error) {
-	req := &protocol.FetchTradesRequest{
-		Exchange: exchange,
-		Symbol:   symbol,
-		Since:    since,
-		Limit:    limit,
+// FetchTrades 获取交易数据
+func (c *dataHiveClient) FetchTrades(ctx context.Context, exchange, marketType, symbol string, since int64, limit int32) ([]*ccxt.Trade, error) {
+	req := &pb.FetchTradesRequest{
+		Exchange:   exchange,
+		MarketType: marketType,
+		Symbol:     symbol,
+		Since:      since,
+		Limit:      limit,
 	}
 
-	respData, err := ec.sendRequest(ctx, protocol.ActionFetchTrades, req)
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_FETCH_TRADES, data, 30*time.Second)
 	if err != nil {
 		return nil, err
 	}
 
-	var resp protocol.FetchTradesResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
+	var tradesResp pb.FetchTradesResponse
+	if err := proto.Unmarshal(resp.Data, &tradesResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
 	var trades []*ccxt.Trade
-	for _, trade := range resp.Trades {
-		ccxtTrade := &ccxt.Trade{
-			ID:        trade.Id,
-			Symbol:    trade.Symbol,
-			Price:     trade.Price,
-			Amount:    trade.Quantity,
-			Side:      trade.Side, // 直接使用字符串
-			Timestamp: trade.Timestamp,
-		}
-		trades = append(trades, ccxtTrade)
+	for _, trade := range tradesResp.Trades {
+		trades = append(trades, c.convertTrade(trade))
 	}
 
 	return trades, nil
 }
 
 // FetchOrderBook 获取订单簿
-func (ec *exchangeClient) FetchOrderBook(ctx context.Context, exchange, symbol string, limit int32) (*ccxt.OrderBook, error) {
-	req := &protocol.FetchOrderBookRequest{
-		Exchange: exchange,
-		Symbol:   symbol,
-		Limit:    limit,
-	}
-
-	respData, err := ec.sendRequest(ctx, protocol.ActionFetchOrderBook, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp protocol.FetchOrderBookResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal orderbook: %w", err)
-	}
-
-	orderBook := &ccxt.OrderBook{
-		Symbol:    resp.Orderbook.Symbol,
-		Timestamp: resp.Orderbook.Timestamp,
-		Datetime:  time.Unix(resp.Orderbook.Timestamp/1000, 0).Format(time.RFC3339),
-		Bids:      ccxt.OrderBookSide{Price: make([]float64, len(resp.Orderbook.Bids)), Size: make([]float64, len(resp.Orderbook.Bids))},
-		Asks:      ccxt.OrderBookSide{Price: make([]float64, len(resp.Orderbook.Asks)), Size: make([]float64, len(resp.Orderbook.Asks))},
-	}
-
-	for i, bid := range resp.Orderbook.Bids {
-		orderBook.Bids.Price[i] = bid.Price
-		orderBook.Bids.Size[i] = bid.Quantity
-	}
-
-	for i, ask := range resp.Orderbook.Asks {
-		orderBook.Asks.Price[i] = ask.Price
-		orderBook.Asks.Size[i] = ask.Quantity
-	}
-
-	return orderBook, nil
-}
-
-// === Watch接口实现 ===
-
-// WatchTicker 订阅ticker
-func (ec *exchangeClient) WatchTicker(ctx context.Context, exchange, marketType, symbol string, callback func(*ccxt.Ticker)) (string, error) {
-	req := &protocol.SubscribeRequest{
+func (c *dataHiveClient) FetchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (*ccxt.OrderBook, error) {
+	req := &pb.FetchOrderBookRequest{
 		Exchange:   exchange,
 		MarketType: marketType,
-		Symbols:    []string{symbol},
-		Ticker:     true,
+		Symbol:     symbol,
+		Limit:      limit,
 	}
 
-	subID, err := ec.sendWatchRequest(ctx, protocol.ActionSubscribe, req)
-	if err != nil {
-		return "", err
-	}
-
-	// 保存订阅信息
-	ctx, cancel := context.WithCancel(ctx)
-	sub := &subscription{
-		ID:       subID,
-		Type:     "ticker",
-		Exchange: exchange,
-		Symbol:   symbol,
-		TickerCB: callback,
-		ctx:      ctx,
-		cancel:   cancel,
-	}
-
-	ec.subMutex.Lock()
-	ec.subscriptions[subID] = sub
-	ec.subMutex.Unlock()
-
-	return subID, nil
-}
-
-// WatchTickers 订阅多个ticker
-func (ec *exchangeClient) WatchTickers(ctx context.Context, exchange, marketType string, symbols []string, callback func(map[string]*ccxt.Ticker)) (string, error) {
-	req := &protocol.SubscribeRequest{
-		Exchange:   exchange,
-		MarketType: marketType,
-		Symbols:    symbols,
-		Ticker:     true,
-	}
-
-	subID, err := ec.sendWatchRequest(ctx, protocol.ActionSubscribe, req)
-	if err != nil {
-		return "", err
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	sub := &subscription{
-		ID:        subID,
-		Type:      "tickers",
-		Exchange:  exchange,
-		Symbols:   symbols,
-		TickersCB: callback,
-		ctx:       ctx,
-		cancel:    cancel,
-	}
-
-	ec.subMutex.Lock()
-	ec.subscriptions[subID] = sub
-	ec.subMutex.Unlock()
-
-	return subID, nil
-}
-
-// WatchOHLCV 订阅K线数据
-func (ec *exchangeClient) WatchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string, callback func(*ccxt.OHLCV)) (string, error) {
-	req := &protocol.SubscribeRequest{
-		Exchange:      exchange,
-		MarketType:    marketType,
-		Symbols:       []string{symbol},
-		Kline:         true,
-		KlineInterval: timeframe,
-	}
-
-	subID, err := ec.sendWatchRequest(ctx, protocol.ActionSubscribe, req)
-	if err != nil {
-		return "", err
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	sub := &subscription{
-		ID:        subID,
-		Type:      "ohlcv",
-		Exchange:  exchange,
-		Symbol:    symbol,
-		Timeframe: timeframe,
-		OHLCVCB:   callback,
-		ctx:       ctx,
-		cancel:    cancel,
-	}
-
-	ec.subMutex.Lock()
-	ec.subscriptions[subID] = sub
-	ec.subMutex.Unlock()
-
-	return subID, nil
-}
-
-// WatchTrades 订阅交易记录
-func (ec *exchangeClient) WatchTrades(ctx context.Context, exchange, marketType, symbol string, callback func([]*ccxt.Trade)) (string, error) {
-	req := &protocol.SubscribeRequest{
-		Exchange:   exchange,
-		MarketType: marketType,
-		Symbols:    []string{symbol},
-		Trade:      true,
-	}
-
-	subID, err := ec.sendWatchRequest(ctx, protocol.ActionSubscribe, req)
-	if err != nil {
-		return "", err
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	sub := &subscription{
-		ID:       subID,
-		Type:     "trades",
-		Exchange: exchange,
-		Symbol:   symbol,
-		TradesCB: callback,
-		ctx:      ctx,
-		cancel:   cancel,
-	}
-
-	ec.subMutex.Lock()
-	ec.subscriptions[subID] = sub
-	ec.subMutex.Unlock()
-
-	return subID, nil
-}
-
-// WatchOrderBook 订阅订单簿
-func (ec *exchangeClient) WatchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32, callback func(*ccxt.OrderBook)) (string, error) {
-	req := &protocol.SubscribeRequest{
-		Exchange:       exchange,
-		MarketType:     marketType,
-		Symbols:        []string{symbol},
-		Orderbook:      true,
-		OrderbookDepth: limit,
-	}
-
-	subID, err := ec.sendWatchRequest(ctx, protocol.ActionSubscribe, req)
-	if err != nil {
-		return "", err
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	sub := &subscription{
-		ID:          subID,
-		Type:        "orderbook",
-		Exchange:    exchange,
-		Symbol:      symbol,
-		Limit:       limit,
-		OrderBookCB: callback,
-		ctx:         ctx,
-		cancel:      cancel,
-	}
-
-	ec.subMutex.Lock()
-	ec.subscriptions[subID] = sub
-	ec.subMutex.Unlock()
-
-	return subID, nil
-}
-
-// Unwatch 取消订阅
-func (ec *exchangeClient) Unwatch(subscriptionID string) error {
-	ec.subMutex.Lock()
-	sub, exists := ec.subscriptions[subscriptionID]
-	if exists {
-		if sub.cancel != nil {
-			sub.cancel()
-		}
-		delete(ec.subscriptions, subscriptionID)
-	}
-	ec.subMutex.Unlock()
-
-	if !exists {
-		return fmt.Errorf("subscription %s not found", subscriptionID)
-	}
-
-	logger.Ctx(sub.ctx).Info("Unsubscribed",
-		zap.String("subscription_id", subscriptionID),
-		zap.String("type", sub.Type),
-		zap.String("exchange", sub.Exchange),
-		zap.String("symbol", sub.Symbol))
-
-	return nil
-}
-
-// === 内部方法 ===
-
-// sendRequest 发送请求并等待响应
-func (ec *exchangeClient) sendRequest(ctx context.Context, action protocol.ActionType, req interface{}) ([]byte, error) {
-	if !ec.IsConnected() {
-		return nil, fmt.Errorf("client not connected")
-	}
-
-	reqData, err := json.Marshal(req)
+	data, err := proto.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := ec.client.SendRequest(action, reqData)
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_FETCH_ORDERBOOK, data, 30*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, err
 	}
 
-	// 检查响应类型，如果是错误类型则返回错误
-	if resp.Type == protocol.TypeError {
-		return nil, fmt.Errorf("server error: response type is error")
+	var orderBookResp pb.FetchOrderBookResponse
+	if err := proto.Unmarshal(resp.Data, &orderBookResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	return resp.Payload, nil
+	return c.convertOrderBook(orderBookResp.Orderbook), nil
 }
 
-// sendWatchRequest 发送订阅请求
-func (ec *exchangeClient) sendWatchRequest(ctx context.Context, action protocol.ActionType, req interface{}) (string, error) {
-	if !ec.IsConnected() {
-		return "", fmt.Errorf("client not connected")
+// =============================================================================
+// Watch Methods (Real-time WebSocket)
+// =============================================================================
+
+// WatchPrice 订阅价格更新
+func (c *dataHiveClient) WatchPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *ccxt.WatchPrice, string, error) {
+	req := &pb.SubscribeRequest{
+		Exchange:   exchange,
+		MarketType: marketType,
+		Symbol:     symbol,
+		DataType:   pb.DataType_TICKER,
 	}
 
-	reqData, err := json.Marshal(req)
+	data, err := proto.Marshal(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal watch request: %w", err)
+		return nil, "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := ec.client.SendRequest(action, reqData)
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_SUBSCRIBE, data, 30*time.Second)
 	if err != nil {
-		return "", fmt.Errorf("failed to send watch request: %w", err)
+		return nil, "", err
 	}
 
-	// 检查响应类型，如果是错误类型则返回错误
-	if resp.Type == protocol.TypeError {
-		return "", fmt.Errorf("subscribe request failed: response type is error")
-	}
-
-	var subscribeResp protocol.SubscribeResponse
-	if err := json.Unmarshal(resp.Payload, &subscribeResp); err != nil {
-		return "", fmt.Errorf("failed to unmarshal subscribe response: %w", err)
+	var subscribeResp pb.SubscribeResponse
+	if err := proto.Unmarshal(resp.Data, &subscribeResp); err != nil {
+		return nil, "", fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
 	if !subscribeResp.Success {
-		return "", fmt.Errorf("subscribe request failed: %s", subscribeResp.Message)
+		return nil, "", fmt.Errorf("subscription failed: %s", subscribeResp.Message)
 	}
 
-	// 使用Message ID作为订阅ID
-	return resp.Id, nil
+	// 创建订阅
+	priceCh := make(chan *ccxt.WatchPrice, 100)
+	_, cancel := context.WithCancel(ctx)
+
+	sub := &subscription{
+		ID:       subscribeResp.Topic,
+		Type:     "price",
+		Exchange: exchange,
+		Symbol:   symbol,
+		PriceCh:  priceCh,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+	}
+
+	c.subMutex.Lock()
+	c.subscriptions[sub.ID] = sub
+	c.subMutex.Unlock()
+
+	return priceCh, sub.ID, nil
 }
 
-// === 消息处理方法 ===
-
-// handleTickerUpdate 处理ticker更新
-func (ec *exchangeClient) handleTickerUpdate(data []byte) error {
-	var update protocol.TickerUpdate
-	if err := json.Unmarshal(data, &update); err != nil {
-		return err
+// WatchOHLCV 订阅K线更新
+func (c *dataHiveClient) WatchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string) (<-chan *ccxt.OHLCV, string, error) {
+	req := &pb.SubscribeRequest{
+		Exchange:      exchange,
+		MarketType:    marketType,
+		Symbol:        symbol,
+		DataType:      pb.DataType_KLINE,
+		KlineInterval: timeframe,
 	}
 
-	ec.subMutex.RLock()
-	sub, exists := ec.subscriptions[update.SubscriptionId]
-	ec.subMutex.RUnlock()
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal request: %w", err)
+	}
 
-	if exists && sub.TickerCB != nil {
-		ticker := ec.convertTicker(update.Ticker)
-		go sub.TickerCB(ticker)
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_SUBSCRIBE, data, 30*time.Second)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var subscribeResp pb.SubscribeResponse
+	if err := proto.Unmarshal(resp.Data, &subscribeResp); err != nil {
+		return nil, "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if !subscribeResp.Success {
+		return nil, "", fmt.Errorf("subscription failed: %s", subscribeResp.Message)
+	}
+
+	// 创建订阅
+	ohlcvCh := make(chan *ccxt.OHLCV, 100)
+	_, cancel := context.WithCancel(ctx)
+
+	sub := &subscription{
+		ID:       subscribeResp.Topic,
+		Type:     "ohlcv",
+		Exchange: exchange,
+		Symbol:   symbol,
+		OHLCVCh:  ohlcvCh,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+	}
+
+	c.subMutex.Lock()
+	c.subscriptions[sub.ID] = sub
+	c.subMutex.Unlock()
+
+	return ohlcvCh, sub.ID, nil
+}
+
+// WatchTrades 订阅交易更新
+func (c *dataHiveClient) WatchTrades(ctx context.Context, exchange, marketType, symbol string) (<-chan *ccxt.Trade, string, error) {
+	req := &pb.SubscribeRequest{
+		Exchange:   exchange,
+		MarketType: marketType,
+		Symbol:     symbol,
+		DataType:   pb.DataType_TRADE,
+	}
+
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_SUBSCRIBE, data, 30*time.Second)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var subscribeResp pb.SubscribeResponse
+	if err := proto.Unmarshal(resp.Data, &subscribeResp); err != nil {
+		return nil, "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if !subscribeResp.Success {
+		return nil, "", fmt.Errorf("subscription failed: %s", subscribeResp.Message)
+	}
+
+	// 创建订阅
+	tradesCh := make(chan *ccxt.Trade, 100)
+	_, cancel := context.WithCancel(ctx)
+
+	sub := &subscription{
+		ID:       subscribeResp.Topic,
+		Type:     "trades",
+		Exchange: exchange,
+		Symbol:   symbol,
+		TradesCh: tradesCh,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+	}
+
+	c.subMutex.Lock()
+	c.subscriptions[sub.ID] = sub
+	c.subMutex.Unlock()
+
+	return tradesCh, sub.ID, nil
+}
+
+// WatchOrderBook 订阅订单簿更新
+func (c *dataHiveClient) WatchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (<-chan *ccxt.OrderBook, string, error) {
+	req := &pb.SubscribeRequest{
+		Exchange:       exchange,
+		MarketType:     marketType,
+		Symbol:         symbol,
+		DataType:       pb.DataType_ORDERBOOK,
+		OrderbookDepth: limit,
+	}
+
+	data, err := proto.Marshal(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_SUBSCRIBE, data, 30*time.Second)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var subscribeResp pb.SubscribeResponse
+	if err := proto.Unmarshal(resp.Data, &subscribeResp); err != nil {
+		return nil, "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if !subscribeResp.Success {
+		return nil, "", fmt.Errorf("subscription failed: %s", subscribeResp.Message)
+	}
+
+	// 创建订阅
+	orderBookCh := make(chan *ccxt.OrderBook, 100)
+	_, cancel := context.WithCancel(ctx)
+
+	sub := &subscription{
+		ID:          subscribeResp.Topic,
+		Type:        "orderbook",
+		Exchange:    exchange,
+		Symbol:      symbol,
+		OrderBookCh: orderBookCh,
+		cancel:      cancel,
+		done:        make(chan struct{}),
+	}
+
+	c.subMutex.Lock()
+	c.subscriptions[sub.ID] = sub
+	c.subMutex.Unlock()
+
+	return orderBookCh, sub.ID, nil
+}
+
+// Unwatch 取消订阅
+func (c *dataHiveClient) Unwatch(subscriptionID string) error {
+	c.subMutex.Lock()
+	sub, exists := c.subscriptions[subscriptionID]
+	if !exists {
+		c.subMutex.Unlock()
+		return fmt.Errorf("subscription not found: %s", subscriptionID)
+	}
+	delete(c.subscriptions, subscriptionID)
+	c.subMutex.Unlock()
+
+	// 发送取消订阅请求
+	req := &pb.UnsubscribeRequest{
+		Topic: subscriptionID,
+	}
+
+	data, err := proto.Marshal(req)
+	if err != nil {
+		c.logger.Error("Failed to marshal unsubscribe request", zap.Error(err))
+	} else {
+		_, err = c.client.SendRequestWithTimeout(pb.ActionType_UNSUBSCRIBE, data, 30*time.Second)
+		if err != nil {
+			c.logger.Error("Failed to send unsubscribe request", zap.Error(err))
+		}
+	}
+
+	// 关闭订阅
+	c.closeSubscription(sub)
+
+	c.logger.Debug("Unsubscribed", zap.String("subscription_id", subscriptionID))
+	return nil
+}
+
+// =============================================================================
+// Internal Message Handling
+// =============================================================================
+
+// registerHandlers 注册消息处理器
+func (c *dataHiveClient) registerHandlers() {
+	c.client.RegisterHandler(pb.ActionType_TICKER_UPDATE, c.handleTickerUpdate)
+	c.client.RegisterHandler(pb.ActionType_KLINE_UPDATE, c.handleKlineUpdate)
+	c.client.RegisterHandler(pb.ActionType_TRADE_UPDATE, c.handleTradeUpdate)
+	c.client.RegisterHandler(pb.ActionType_ORDERBOOK_UPDATE, c.handleOrderBookUpdate)
+}
+
+// handleTickerUpdate 处理ticker更新消息
+func (c *dataHiveClient) handleTickerUpdate(msg *pb.Message) error {
+	var update pb.TickerUpdate
+	if err := proto.Unmarshal(msg.Data, &update); err != nil {
+		return fmt.Errorf("failed to unmarshal ticker update: %w", err)
+	}
+
+	c.subMutex.RLock()
+	sub, exists := c.subscriptions[update.Topic]
+	c.subMutex.RUnlock()
+
+	if !exists || sub.PriceCh == nil {
+		return nil
+	}
+
+	// 转换为WatchPrice格式
+	watchPrice := &ccxt.WatchPrice{
+		Symbol:     update.Ticker.Symbol,
+		Price:      update.Ticker.Last,
+		TimeStamp:  update.Ticker.Timestamp,
+		StreamName: update.Topic,
+	}
+
+	select {
+	case sub.PriceCh <- watchPrice:
+	default:
+		c.logger.Warn("Price channel full, dropping message", zap.String("topic", update.Topic))
 	}
 
 	return nil
 }
 
-// handleTickersUpdate 处理多个ticker更新
-func (ec *exchangeClient) handleTickersUpdate(data []byte) error {
-	var update protocol.TickerUpdate
-	if err := json.Unmarshal(data, &update); err != nil {
-		return err
+// handleKlineUpdate 处理K线更新消息
+func (c *dataHiveClient) handleKlineUpdate(msg *pb.Message) error {
+	var update pb.KlineUpdate
+	if err := proto.Unmarshal(msg.Data, &update); err != nil {
+		return fmt.Errorf("failed to unmarshal kline update: %w", err)
 	}
 
-	ec.subMutex.RLock()
-	sub, exists := ec.subscriptions[update.SubscriptionId]
-	ec.subMutex.RUnlock()
+	c.subMutex.RLock()
+	sub, exists := c.subscriptions[update.Topic]
+	c.subMutex.RUnlock()
 
-	if exists && sub.TickersCB != nil {
-		tickers := make(map[string]*ccxt.Ticker)
-		// TickerUpdate只包含单个ticker，所以放到map中
-		tickers[update.Ticker.Symbol] = ec.convertTicker(update.Ticker)
-		go sub.TickersCB(tickers)
+	if !exists || sub.OHLCVCh == nil {
+		return nil
 	}
 
-	return nil
-}
+	ohlcv := c.convertKlineToOHLCV(update.Kline)
 
-// handleOHLCVUpdate 处理K线更新
-func (ec *exchangeClient) handleOHLCVUpdate(data []byte) error {
-	var update protocol.KlineUpdate
-	if err := json.Unmarshal(data, &update); err != nil {
-		return err
-	}
-
-	ec.subMutex.RLock()
-	sub, exists := ec.subscriptions[update.SubscriptionId]
-	ec.subMutex.RUnlock()
-
-	if exists && sub.OHLCVCB != nil {
-		ohlcv := &ccxt.OHLCV{
-			Timestamp: update.Kline.OpenTime,
-			Open:      update.Kline.Open,
-			High:      update.Kline.High,
-			Low:       update.Kline.Low,
-			Close:     update.Kline.Close,
-			Volume:    update.Kline.Volume,
-		}
-		go sub.OHLCVCB(ohlcv)
+	select {
+	case sub.OHLCVCh <- ohlcv:
+	default:
+		c.logger.Warn("OHLCV channel full, dropping message", zap.String("topic", update.Topic))
 	}
 
 	return nil
 }
 
-// handleTradesUpdate 处理交易记录更新
-func (ec *exchangeClient) handleTradesUpdate(data []byte) error {
-	var update protocol.TradeUpdate
-	if err := json.Unmarshal(data, &update); err != nil {
-		return err
+// handleTradeUpdate 处理交易更新消息
+func (c *dataHiveClient) handleTradeUpdate(msg *pb.Message) error {
+	var update pb.TradeUpdate
+	if err := proto.Unmarshal(msg.Data, &update); err != nil {
+		return fmt.Errorf("failed to unmarshal trade update: %w", err)
 	}
 
-	ec.subMutex.RLock()
-	sub, exists := ec.subscriptions[update.SubscriptionId]
-	ec.subMutex.RUnlock()
+	c.subMutex.RLock()
+	sub, exists := c.subscriptions[update.Topic]
+	c.subMutex.RUnlock()
 
-	if exists && sub.TradesCB != nil {
-		var trades []*ccxt.Trade
-		// TradeUpdate包含单个trade，包装成数组
-		ccxtTrade := &ccxt.Trade{
-			ID:        update.Trade.Id,
-			Symbol:    update.Trade.Symbol,
-			Price:     update.Trade.Price,
-			Amount:    update.Trade.Quantity,
-			Side:      update.Trade.Side, // 直接使用字符串
-			Timestamp: update.Trade.Timestamp,
-		}
-		trades = append(trades, ccxtTrade)
-		go sub.TradesCB(trades)
+	if !exists || sub.TradesCh == nil {
+		return nil
+	}
+
+	trade := c.convertTrade(update.Trade)
+
+	select {
+	case sub.TradesCh <- trade:
+	default:
+		c.logger.Warn("Trades channel full, dropping message", zap.String("topic", update.Topic))
 	}
 
 	return nil
 }
 
-// handleOrderBookUpdate 处理订单簿更新
-func (ec *exchangeClient) handleOrderBookUpdate(data []byte) error {
-	var update protocol.OrderBookUpdate
-	if err := json.Unmarshal(data, &update); err != nil {
-		return err
+// handleOrderBookUpdate 处理订单簿更新消息
+func (c *dataHiveClient) handleOrderBookUpdate(msg *pb.Message) error {
+	var update pb.OrderBookUpdate
+	if err := proto.Unmarshal(msg.Data, &update); err != nil {
+		return fmt.Errorf("failed to unmarshal orderbook update: %w", err)
 	}
 
-	ec.subMutex.RLock()
-	sub, exists := ec.subscriptions[update.SubscriptionId]
-	ec.subMutex.RUnlock()
+	c.subMutex.RLock()
+	sub, exists := c.subscriptions[update.Topic]
+	c.subMutex.RUnlock()
 
-	if exists && sub.OrderBookCB != nil {
-		orderBook := &ccxt.OrderBook{
-			Symbol:    update.Orderbook.Symbol,
-			Timestamp: update.Orderbook.Timestamp,
-			Datetime:  time.Unix(update.Orderbook.Timestamp/1000, 0).Format(time.RFC3339),
-			Bids:      ccxt.OrderBookSide{Price: make([]float64, len(update.Orderbook.Bids)), Size: make([]float64, len(update.Orderbook.Bids))},
-			Asks:      ccxt.OrderBookSide{Price: make([]float64, len(update.Orderbook.Asks)), Size: make([]float64, len(update.Orderbook.Asks))},
-		}
+	if !exists || sub.OrderBookCh == nil {
+		return nil
+	}
 
-		for i, bid := range update.Orderbook.Bids {
-			orderBook.Bids.Price[i] = bid.Price
-			orderBook.Bids.Size[i] = bid.Quantity
-		}
+	orderBook := c.convertOrderBook(update.Orderbook)
 
-		for i, ask := range update.Orderbook.Asks {
-			orderBook.Asks.Price[i] = ask.Price
-			orderBook.Asks.Size[i] = ask.Quantity
-		}
-
-		go sub.OrderBookCB(orderBook)
+	select {
+	case sub.OrderBookCh <- orderBook:
+	default:
+		c.logger.Warn("OrderBook channel full, dropping message", zap.String("topic", update.Topic))
 	}
 
 	return nil
 }
 
-// convertTicker 转换ticker格式
-func (ec *exchangeClient) convertTicker(ticker *protocol.Ticker) *ccxt.Ticker {
+// =============================================================================
+// Data Conversion Functions
+// =============================================================================
+
+// convertTicker 转换ticker数据
+func (c *dataHiveClient) convertTicker(ticker *pb.Ticker) *ccxt.Ticker {
 	return &ccxt.Ticker{
-		Symbol:        ticker.Symbol,
-		Timestamp:     ticker.Timestamp,
-		Datetime:      time.Unix(ticker.Timestamp/1000, 0).Format(time.RFC3339),
-		High:          ticker.High,
-		Low:           ticker.Low,
-		Bid:           ticker.Bid,
-		BidVolume:     0, // protocol.Ticker没有这个字段
-		Ask:           ticker.Ask,
-		AskVolume:     0, // protocol.Ticker没有这个字段
-		Vwap:          0, // protocol.Ticker没有这个字段
-		Open:          ticker.Open,
-		Close:         ticker.Close,
-		Last:          ticker.Last,
-		PreviousClose: 0, // protocol.Ticker没有这个字段
-		Change:        ticker.Change,
-		Percentage:    ticker.ChangePercent,
-		Average:       0, // protocol.Ticker没有这个字段
-		BaseVolume:    ticker.Volume,
-		QuoteVolume:   0, // protocol.Ticker没有这个字段，使用Volume作为BaseVolume
+		Symbol:     ticker.Symbol,
+		TimeStamp:  ticker.Timestamp,
+		High:       ticker.High,
+		Low:        ticker.Low,
+		Bid:        ticker.Bid,
+		Ask:        ticker.Ask,
+		Last:       ticker.Last,
+		Open:       ticker.Open,
+		Close:      ticker.Close,
+		BaseVolume: ticker.Volume,
+		Change:     ticker.Change,
+		Percentage: ticker.ChangePercent,
 	}
+}
+
+// convertMarket 转换市场数据
+func (c *dataHiveClient) convertMarket(market *pb.Market) *ccxt.Market {
+	return &ccxt.Market{
+		ID:      market.Id,
+		Symbol:  market.Symbol,
+		Base:    market.Base,
+		Quote:   market.Quote,
+		Active:  market.Active,
+		Type:    market.Type,
+		Spot:    market.Spot,
+		Linear:  market.Linear,
+		Inverse: market.Inverse,
+	}
+}
+
+// convertKlineToOHLCV 转换K线数据为OHLCV
+func (c *dataHiveClient) convertKlineToOHLCV(kline *pb.Kline) *ccxt.OHLCV {
+	return &ccxt.OHLCV{
+		Timestamp: kline.OpenTime,
+		Open:      kline.Open,
+		High:      kline.High,
+		Low:       kline.Low,
+		Close:     kline.Close,
+		Volume:    kline.Volume,
+	}
+}
+
+// convertTrade 转换交易数据
+func (c *dataHiveClient) convertTrade(trade *pb.Trade) *ccxt.Trade {
+	return &ccxt.Trade{
+		ID:        trade.Id,
+		Symbol:    trade.Symbol,
+		Price:     trade.Price,
+		Amount:    trade.Quantity,
+		Side:      trade.Side,
+		Timestamp: trade.Timestamp,
+	}
+}
+
+// convertOrderBook 转换订单簿数据
+func (c *dataHiveClient) convertOrderBook(orderbook *pb.OrderBook) *ccxt.OrderBook {
+	var bids ccxt.OrderBookSide
+	var asks ccxt.OrderBookSide
+
+	// 转换bids
+	if len(orderbook.Bids) > 0 {
+		bidPrices := make([]float64, len(orderbook.Bids))
+		bidSizes := make([]float64, len(orderbook.Bids))
+		for i, bid := range orderbook.Bids {
+			bidPrices[i] = bid.Price
+			bidSizes[i] = bid.Quantity
+		}
+		bids = ccxt.OrderBookSide{
+			Price: bidPrices,
+			Size:  bidSizes,
+		}
+	}
+
+	// 转换asks
+	if len(orderbook.Asks) > 0 {
+		askPrices := make([]float64, len(orderbook.Asks))
+		askSizes := make([]float64, len(orderbook.Asks))
+		for i, ask := range orderbook.Asks {
+			askPrices[i] = ask.Price
+			askSizes[i] = ask.Quantity
+		}
+		asks = ccxt.OrderBookSide{
+			Price: askPrices,
+			Size:  askSizes,
+		}
+	}
+
+	return &ccxt.OrderBook{
+		Symbol:    orderbook.Symbol,
+		Bids:      bids,
+		Asks:      asks,
+		TimeStamp: orderbook.Timestamp,
+		Nonce:     0, // 如果protocol中有nonce字段可以添加
+	}
+}
+
+// =============================================================================
+// Internal Helper Methods
+// =============================================================================
+
+// closeSubscription 关闭订阅
+func (c *dataHiveClient) closeSubscription(sub *subscription) {
+	if sub.cancel != nil {
+		sub.cancel()
+	}
+
+	// 关闭channels
+	if sub.PriceCh != nil {
+		close(sub.PriceCh)
+	}
+	if sub.OHLCVCh != nil {
+		close(sub.OHLCVCh)
+	}
+	if sub.TradesCh != nil {
+		close(sub.TradesCh)
+	}
+	if sub.OrderBookCh != nil {
+		close(sub.OrderBookCh)
+	}
+	if sub.done != nil {
+		close(sub.done)
+	}
+}
+
+// notifyError 通知错误
+func (c *dataHiveClient) notifyError(err error) {
+	c.errorMu.RLock()
+	handler := c.errorHandler
+	c.errorMu.RUnlock()
+
+	if handler != nil {
+		go handler(err)
+	}
+
+	c.logger.Error("DataHive client error", zap.Error(err))
 }

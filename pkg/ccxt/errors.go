@@ -504,7 +504,7 @@ type HTTPError struct {
 }
 
 // CreateErrorFromHTTP 从HTTP响应创建错误
-func CreateErrorFromHTTP(httpErr HTTPError, exchangeSpecificHandler func(HTTPError) Error) Error {
+func createErrorFromHTTP(httpErr HTTPError, exchangeSpecificHandler func(HTTPError) Error) Error {
 	// 首先尝试交易所特定的错误处理
 	if exchangeSpecificHandler != nil {
 		if err := exchangeSpecificHandler(httpErr); err != nil {

@@ -12,7 +12,7 @@ import (
 
 func TestExporterV2(t *testing.T) {
 	ts := newTestLogSpy(t)
-	conf := &Config{Level: "debug", DisableTimestamp: true}
+	conf := &Config{Level: "debug", Format: "text", DisableTimestamp: true}
 	logger, properties, _ := InitTestLogger(ts, conf)
 	ReplaceGlobals(logger, properties)
 
@@ -58,7 +58,7 @@ func TestExporterV2(t *testing.T) {
 
 func TestMLoggerRatedLog(t *testing.T) {
 	ts := newTestLogSpy(t)
-	conf := &Config{Level: "debug", DisableTimestamp: true}
+	conf := &Config{Level: "debug", Format: "text", DisableTimestamp: true}
 	logger, p, _ := InitTestLogger(ts, conf)
 	ReplaceGlobals(logger, p)
 
@@ -105,7 +105,7 @@ func TestMLoggerRatedLog(t *testing.T) {
 
 func TestNewIntentContext(t *testing.T) {
 	ts := newTestLogSpy(t)
-	conf := &Config{Level: "debug", DisableTimestamp: true}
+	conf := &Config{Level: "debug", Format: "text", DisableTimestamp: true}
 	logger, p, _ := InitTestLogger(ts, conf)
 	ReplaceGlobals(logger, p)
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"datahive/config"
 	"datahive/pkg/logger"
-	"datahive/pkg/protocol"
+	"datahive/pkg/protocol/pb"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -59,17 +59,36 @@ type KVStorageStats struct {
 	MaxLatencyMs     float64
 }
 
-// NewRedisStorage 创建 Redis 存储实例
-func NewRedisStorage(conf *config.RedisConfig) *RedisStorage {
+// NewRedisStorage 创建并连接 Redis 存储实例
+func NewRedisStorage(ctx context.Context, conf *config.RedisConfig) (*RedisStorage, error) {
 	if conf == nil {
 		conf = config.NewRedisConfig()
 	}
 
-	return &RedisStorage{
+	storage := &RedisStorage{
 		config:        conf,
 		typeConverter: NewTypeConverter(),
 		stats:         &KVStorageStats{},
 	}
+
+	// 立即建立连接
+	if err := storage.Connect(ctx); err != nil {
+		return nil, ErrConnectionError("failed to initialize Redis storage", err)
+	}
+
+	// 启动优雅退出监听
+	go func() {
+		<-ctx.Done()
+
+		logger.Ctx(context.Background()).Info("收到退出信号，开始优雅关闭Redis存储...")
+		if err := storage.Close(); err != nil {
+			logger.Ctx(context.Background()).Error("Redis存储关闭失败", zap.Error(err))
+		} else {
+			logger.Ctx(context.Background()).Info("Redis存储已优雅关闭")
+		}
+	}()
+
+	return storage, nil
 }
 
 // Connect 连接到 Redis
@@ -715,7 +734,7 @@ func (r *RedisStorage) FlushDB(ctx context.Context) error {
 }
 
 // SetTicket 设置价格缓存
-func (r *RedisStorage) SetTicket(ctx context.Context, exchange string, ticker *protocol.Ticker, expiration time.Duration) error {
+func (r *RedisStorage) SetTicket(ctx context.Context, exchange string, ticker *pb.Ticker, expiration time.Duration) error {
 	if ticker == nil {
 		return ErrInvalidData("ticker cannot be nil")
 	}
@@ -734,7 +753,7 @@ func (r *RedisStorage) SetTicket(ctx context.Context, exchange string, ticker *p
 }
 
 // GetTicket 获取价格缓存
-func (r *RedisStorage) GetTicket(ctx context.Context, exchange string, symbol string) (*protocol.Ticker, error) {
+func (r *RedisStorage) GetTicket(ctx context.Context, exchange string, symbol string) (*pb.Ticker, error) {
 	if exchange == "" || symbol == "" {
 		return nil, ErrInvalidData("exchange and symbol cannot be empty")
 	}
@@ -745,7 +764,7 @@ func (r *RedisStorage) GetTicket(ctx context.Context, exchange string, symbol st
 		return nil, err
 	}
 
-	var ticker protocol.Ticker
+	var ticker pb.Ticker
 	if err := json.Unmarshal(data, &ticker); err != nil {
 		return nil, ErrQueryError("failed to unmarshal ticker", err)
 	}

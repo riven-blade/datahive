@@ -8,7 +8,6 @@ import (
 	"syscall"
 	"time"
 
-	"datahive/client"
 	"datahive/config"
 	"datahive/core"
 	"datahive/pkg/logger"
@@ -85,15 +84,6 @@ func startServices(ctx context.Context, cfg *config.Config) (*core.DataHive, err
 
 	if err := dataHive.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start datahive service: %w", err)
-	}
-
-	// 2. TCP Client可用性验证（便捷调用封装）
-	logger.Ctx(ctx).Info("📱 Verifying TCP Client availability...")
-	_, err := client.DefaultGNetClient()
-	if err != nil {
-		logger.Ctx(ctx).Error("Failed to create default TCP client", zap.Error(err))
-	} else {
-		logger.Ctx(ctx).Info("✅ TCP Client service available")
 	}
 
 	logger.Ctx(ctx).Info("✅ All services started successfully")

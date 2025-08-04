@@ -127,7 +127,7 @@ func (b *Bybit) parseTicker(data map[string]interface{}, market *ccxt.Market) *c
 
 	return &ccxt.Ticker{
 		Symbol:        market.Symbol,
-		Timestamp:     timestamp,
+		TimeStamp:     timestamp,
 		Datetime:      time.Unix(timestamp/1000, 0).UTC().Format(time.RFC3339),
 		High:          high,
 		Low:           low,
@@ -214,8 +214,6 @@ func (b *Bybit) parseOrderBook(data map[string]interface{}, market *ccxt.Market)
 	bidsData, _ := data["b"].([]interface{})
 	asksData, _ := data["a"].([]interface{})
 
-	var bids, asks []ccxt.PriceLevel
-
 	// 解析买单
 	bidPrices := make([]float64, 0)
 	bidSizes := make([]float64, 0)
@@ -248,7 +246,7 @@ func (b *Bybit) parseOrderBook(data map[string]interface{}, market *ccxt.Market)
 		Symbol:    market.Symbol,
 		Bids:      ccxt.OrderBookSide{Price: bidPrices, Size: bidSizes},
 		Asks:      ccxt.OrderBookSide{Price: askPrices, Size: askSizes},
-		Timestamp: timestamp,
+		TimeStamp: timestamp,
 		Datetime:  time.Unix(timestamp/1000, 0).UTC().Format(time.RFC3339),
 		Nonce:     0,
 		Info:      data,

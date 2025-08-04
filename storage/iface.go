@@ -2,8 +2,9 @@ package storage
 
 import (
 	"context"
-	"datahive/pkg/protocol"
 	"time"
+
+	"datahive/pkg/protocol/pb"
 )
 
 // TimeSeriesStorage 时序数据存储接口
@@ -13,14 +14,14 @@ type TimeSeriesStorage interface {
 	Ping(ctx context.Context) error
 	IsHealthy() bool
 
-	SaveKlines(ctx context.Context, exchange string, klines []*protocol.Kline) error
-	QueryKlines(ctx context.Context, exchange, symbol, timeframe string, start int64, limit int) ([]*protocol.Kline, error)
+	SaveKlines(ctx context.Context, exchange string, klines []*pb.Kline) error
+	QueryKlines(ctx context.Context, exchange, symbol, timeframe string, start int64, limit int) ([]*pb.Kline, error)
 
-	SaveTrades(ctx context.Context, exchange string, trades []*protocol.Trade) error
-	QueryTrades(ctx context.Context, exchange, symbol string, start int64, limit int) ([]*protocol.Trade, error)
+	SaveTrades(ctx context.Context, exchange string, trades []*pb.Trade) error
+	QueryTrades(ctx context.Context, exchange, symbol string, start int64, limit int) ([]*pb.Trade, error)
 
-	SaveTickers(ctx context.Context, exchange string, prices []*protocol.Ticker) error
-	QueryTickers(ctx context.Context, exchange, symbol string, start int64, limit int) ([]*protocol.Ticker, error)
+	SaveTickers(ctx context.Context, exchange string, prices []*pb.Ticker) error
+	QueryTickers(ctx context.Context, exchange, symbol string, start int64, limit int) ([]*pb.Ticker, error)
 
 	DeleteExpiredData(ctx context.Context, beforeTime int64) error
 }
@@ -58,6 +59,6 @@ type KVStorage interface {
 
 	FlushDB(ctx context.Context) error
 
-	SetTicket(ctx context.Context, exchange string, ticket *protocol.Ticker, expiration time.Duration) error
-	GetTicket(ctx context.Context, exchange string, symbol string) (*protocol.Ticker, error)
+	SetTicket(ctx context.Context, exchange string, ticket *pb.Ticker, expiration time.Duration) error
+	GetTicket(ctx context.Context, exchange string, symbol string) (*pb.Ticker, error)
 }

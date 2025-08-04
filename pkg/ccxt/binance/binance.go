@@ -11,8 +11,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/spf13/cast"
 
 	"datahive/pkg/ccxt"
 )
@@ -32,20 +33,20 @@ func init() {
 			UserAgent:       config.GetUserAgent(),
 			Headers:         config.GetHeaders(),
 			Options:         config.GetOptions(),
-			DefaultType:     config.GetMarketType(),
+			MarketType:      config.GetMarketType(),
 			WSMaxReconnect:  5,    // 默认值
 			RecvWindow:      5000, // Binance特有配置
 		}
 
 		// 如果是BaseConfig，可以获取额外的字段
 		if baseConfig, ok := config.(*ccxt.BaseConfig); ok {
-			binanceConfig.DefaultType = baseConfig.DefaultType
+			binanceConfig.MarketType = baseConfig.DefaultType
 			binanceConfig.EnableWebSocket = baseConfig.EnableWebSocket
 			binanceConfig.WSMaxReconnect = baseConfig.WSMaxReconnect
 			binanceConfig.RecvWindow = baseConfig.RecvWindow
 		} else {
 			// 非BaseConfig的兜底默认值
-			binanceConfig.DefaultType = "spot"
+			binanceConfig.MarketType = "spot"
 			binanceConfig.EnableWebSocket = false
 		}
 
@@ -58,16 +59,17 @@ func init() {
 // Binance 实现完整的CCXT交易所接口
 type Binance struct {
 	*ccxt.BaseExchange
-	config *Config
+	config     *Config
+	marketType string // 市场类型：spot, futures
 
 	// API端点缓存
 	endpoints map[string]string
 
 	// 订阅管理
-	subscriptions map[string]bool
+	subscriptions map[string]string
 
-	// WebSocket客户端
-	wsClient *BinanceWebSocket
+	// WebSocket连接池 - 支持多实例管理
+	wsPool *WebSocketPool
 
 	// 缓存字段
 	lastServerTimeRequest int64
@@ -86,13 +88,14 @@ func New(config *Config) (*Binance, error) {
 	binance := &Binance{
 		BaseExchange:  base,
 		config:        config.Clone(),
+		marketType:    config.MarketType,
 		endpoints:     make(map[string]string),
-		subscriptions: make(map[string]bool),
+		subscriptions: make(map[string]string),
 	}
 
-	// 初始化WebSocket客户端
+	// 初始化WebSocket连接池
 	if config.EnableWebSocket {
-		binance.wsClient = NewBinanceWebSocket(binance)
+		binance.wsPool = NewWebSocketPool(binance)
 	}
 
 	// 设置基础信息
@@ -107,10 +110,78 @@ func New(config *Config) (*Binance, error) {
 	// 设置API端点
 	binance.SetEndpoints()
 
+	// 设置市场
+	_, err := binance.LoadMarkets(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
 	// 设置费率信息
 	binance.SetFees()
 
 	return binance, nil
+}
+
+// GetSharedChannels 获取WebSocket的共享channels - 新架构不再需要
+// 这些方法保留为空实现以兼容接口，但不推荐使用
+func (b *Binance) GetPriceChannel() <-chan *ccxt.WatchPrice {
+	return nil
+}
+
+func (b *Binance) GetKlineChannel() <-chan *ccxt.WatchOHLCV {
+	return nil
+}
+
+func (b *Binance) GetTradeChannel() <-chan *ccxt.WatchTrade {
+	return nil
+}
+
+func (b *Binance) GetOrderBookChannel() <-chan *ccxt.WatchOrderBook {
+	return nil
+}
+
+// GenerateChannel
+func (b *Binance) GenerateChannel(symbol string, params map[string]interface{}) string {
+	if symbol == "" {
+		return ""
+	}
+
+	var marketID string
+
+	// LoadMarkets 内部已有缓存逻辑
+	markets, err := b.LoadMarkets(context.Background())
+	if err == nil {
+		if market, exists := markets[symbol]; exists {
+			marketID = strings.ToLower(market.ID)
+		}
+	}
+
+	// Fallback: 使用简单转换
+	if marketID == "" {
+		marketID = strings.ToLower(strings.ReplaceAll(symbol, "/", ""))
+	}
+
+	eventType := cast.ToString(params["eventType"])
+
+	switch strings.ToLower(eventType) {
+	case "ticker":
+		return fmt.Sprintf("%s@ticker", marketID)
+	case "kline":
+		interval := cast.ToString(params["interval"])
+		if interval == "" {
+			interval = "1m"
+		}
+		return fmt.Sprintf("%s@kline_%s", marketID, interval)
+	case "trade":
+		return fmt.Sprintf("%s@trade", marketID)
+	case "orderbook", "depth":
+		if depth := cast.ToInt(params["depth"]); depth > 0 {
+			return fmt.Sprintf("%s@depth%d", marketID, depth)
+		}
+		return fmt.Sprintf("%s@depth", marketID)
+	default:
+		return fmt.Sprintf("%s@%s", marketID, strings.ToLower(eventType))
+	}
 }
 
 // ========== 基础配置方法 ==========
@@ -409,25 +480,22 @@ func (b *Binance) LoadMarkets(ctx context.Context, reload ...bool) (map[string]*
 		return b.BaseExchange.GetMarkets(), nil
 	}
 
-	// 获取现货市场
-	spotMarkets, err := b.fetchSpotMarkets(ctx)
+	var markets map[string]*ccxt.Market
+	var err error
+
+	switch b.marketType {
+	case "futures":
+		markets, err = b.fetchFuturesMarkets(ctx)
+	default:
+		markets, err = b.fetchSpotMarkets(ctx)
+	}
+
 	if err != nil {
 		return nil, err
 	}
 
-	// 如果支持期货，也获取期货市场
-	allMarkets := spotMarkets
-	if b.HasAPI("future") {
-		futuresMarkets, err := b.fetchFuturesMarkets(ctx)
-		if err == nil { // 期货市场失败不影响现货
-			for k, v := range futuresMarkets {
-				allMarkets[k] = v
-			}
-		}
-	}
-
-	b.BaseExchange.SetMarkets(allMarkets)
-	return allMarkets, nil
+	b.BaseExchange.SetMarkets(markets)
+	return markets, nil
 }
 
 // fetchSpotMarkets 获取现货市场
@@ -479,6 +547,23 @@ func (b *Binance) fetchFuturesMarkets(ctx context.Context) (map[string]*ccxt.Mar
 		if market != nil {
 			markets[market.Symbol] = market
 		}
+	}
+
+	return markets, nil
+}
+
+// FetchMarkets 获取市场信息
+func (b *Binance) FetchMarkets(ctx context.Context, params map[string]interface{}) ([]*ccxt.Market, error) {
+	// 调用LoadMarkets获取所有市场
+	marketsMap, err := b.LoadMarkets(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// 转换为slice格式
+	markets := make([]*ccxt.Market, 0, len(marketsMap))
+	for _, market := range marketsMap {
+		markets = append(markets, market)
 	}
 
 	return markets, nil
@@ -642,9 +727,15 @@ func (b *Binance) FetchTrades(ctx context.Context, symbol string, since int64, l
 		return nil, err
 	}
 
+	// 先检查是否是错误响应
+	var errorResp APIResponse
+	if err := json.Unmarshal([]byte(response), &errorResp); err == nil && errorResp.Code != 0 {
+		return nil, ccxt.NewExchangeError(fmt.Sprintf("Binance API error: %d - %s", errorResp.Code, errorResp.Msg))
+	}
+
 	var tradesData []TradeResponse
 	if err := json.Unmarshal([]byte(response), &tradesData); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse trades response: %w. Response: %s", err, response)
 	}
 
 	trades := make([]*ccxt.Trade, len(tradesData))
@@ -697,9 +788,22 @@ func (b *Binance) FetchOHLCV(ctx context.Context, symbol, timeframe string, sinc
 		return nil, err
 	}
 
+	// 添加调试信息
+	if len(response) > 200 {
+		fmt.Printf("Binance Klines Response (first 200 chars): %s...\n", response[:200])
+	} else {
+		fmt.Printf("Binance Klines Response: %s\n", response)
+	}
+
+	// 先检查是否是错误响应
+	var errorResp APIResponse
+	if err := json.Unmarshal([]byte(response), &errorResp); err == nil && errorResp.Code != 0 {
+		return nil, ccxt.NewExchangeError(fmt.Sprintf("Binance API error: %d - %s", errorResp.Code, errorResp.Msg))
+	}
+
 	var klinesData KlineResponse
 	if err := json.Unmarshal([]byte(response), &klinesData); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse klines response (len=%d): %w. Response: %s", len(response), err, response)
 	}
 
 	klines := make([]*ccxt.OHLCV, len(klinesData))
@@ -2042,9 +2146,15 @@ func (b *Binance) fetchFuturesBalance(ctx context.Context, params map[string]int
 // getMarket 获取市场信息
 func (b *Binance) getMarket(symbol string) (*ccxt.Market, error) {
 	markets := b.BaseExchange.GetMarkets()
+
 	if market, exists := markets[symbol]; exists {
 		return market, nil
 	}
+
+	if market, exists := markets[strings.ToLower(symbol)]; exists {
+		return market, nil
+	}
+
 	return nil, ccxt.NewMarketNotFound(symbol)
 }
 
@@ -2060,13 +2170,11 @@ func (b *Binance) getMarketByID(id string) *ccxt.Market {
 }
 
 // getMarketType 获取市场类型
-
-// getMarketType 获取市场类型
 func (b *Binance) getMarketType(params map[string]interface{}) string {
 	if marketType, ok := params["type"].(string); ok {
 		return marketType
 	}
-	return b.config.DefaultType
+	return b.config.MarketType
 }
 
 // getOrderEndpoint 获取订单端点
@@ -3810,197 +3918,55 @@ func (b *Binance) extractPath(fullURL string) string {
 
 // ========== WebSocket 方法委托 ==========
 
-// WatchTicker 观察单个交易对的ticker
-func (b *Binance) WatchTicker(ctx context.Context, symbol string, params map[string]interface{}) (<-chan *ccxt.WatchTicker, error) {
-	if b.wsClient == nil {
-		return nil, ccxt.NewNotSupported("WebSocket not enabled")
-	}
-	return b.wsClient.WatchTicker(ctx, symbol, params)
-}
-
-// WatchTickers 观察多个交易对的ticker
-func (b *Binance) WatchTickers(ctx context.Context, symbols []string, params map[string]interface{}) (<-chan map[string]*ccxt.WatchTicker, error) {
-	if b.wsClient == nil {
-		return nil, ccxt.NewNotSupported("WebSocket not enabled")
+// WatchPrice 观察单个交易对的价格
+func (b *Binance) WatchPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchPrice, error) {
+	if b.wsPool == nil {
+		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
 
-	if len(symbols) == 0 {
-		return nil, ccxt.NewInvalidRequest("symbols array cannot be empty")
-	}
-
-	// 确保WebSocket连接
-	if !b.wsClient.isConnected {
-		if err := b.wsClient.Connect(ctx); err != nil {
-			return nil, fmt.Errorf("failed to connect websocket: %w", err)
-		}
-	}
-
-	// 创建结果channel
-	resultChan := make(chan map[string]*ccxt.WatchTicker, 1000)
-
-	// 存储ticker数据
-	tickerMap := sync.Map{} // 线程安全的map
-
-	// 构建批量订阅流列表
-	streams := make([]string, len(symbols))
-	for i, symbol := range symbols {
-		normalizedSymbol := strings.ToLower(b.wsClient.convertSymbol(symbol))
-		streams[i] = fmt.Sprintf("%s@ticker", normalizedSymbol)
-	}
-
-	// 批量订阅ticker流
-	if err := b.wsClient.SubscribeToStreams(streams); err != nil {
-		return nil, fmt.Errorf("failed to subscribe to ticker streams: %w", err)
-	}
-
-	// 启动消息处理器
-	go func() {
-		defer close(resultChan)
-
-		// 监听ticker频道
-		for ticker := range b.wsClient.tickerChan {
-			if ticker == nil {
-				continue
-			}
-
-			// 检查symbol是否在订阅列表中
-			normalizedSymbol := strings.ToLower(b.wsClient.convertSymbol(ticker.Symbol))
-			found := false
-			for _, sym := range symbols {
-				if strings.ToLower(b.wsClient.convertSymbol(sym)) == normalizedSymbol {
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				continue // 不是我们订阅的symbol
-			}
-
-			// 更新ticker数据
-			tickerMap.Store(ticker.Symbol, ticker)
-
-			// 构建当前所有ticker的快照
-			currentTickers := make(map[string]*ccxt.WatchTicker)
-			tickerMap.Range(func(key, value interface{}) bool {
-				if symbol, ok := key.(string); ok {
-					if tickerData, ok := value.(*ccxt.WatchTicker); ok {
-						// 只包含请求的symbols
-						for _, requestedSymbol := range symbols {
-							if strings.EqualFold(symbol, requestedSymbol) {
-								currentTickers[symbol] = tickerData
-								break
-							}
-						}
-					}
-				}
-				return true
-			})
-
-			// 只有当包含数据时才发送
-			if len(currentTickers) > 0 {
-				select {
-				case resultChan <- currentTickers:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-
-	return resultChan, nil
+	return b.wsPool.WatchPrice(ctx, symbol, params)
 }
 
 // WatchOrderBook 观察订单簿
-func (b *Binance) WatchOrderBook(ctx context.Context, symbol string, limit int, params map[string]interface{}) (<-chan *ccxt.WatchOrderBook, error) {
-	if b.wsClient == nil {
-		return nil, ccxt.NewNotSupported("WebSocket not enabled")
+func (b *Binance) WatchOrderBook(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchOrderBook, error) {
+	if b.wsPool == nil {
+		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
-	return b.wsClient.WatchOrderBook(ctx, symbol, limit, params)
+
+	return b.wsPool.WatchOrderBook(ctx, symbol, params)
 }
 
-// WatchTrades 观察交易数据
-func (b *Binance) WatchTrades(ctx context.Context, symbol string, since int64, limit int, params map[string]interface{}) (<-chan *ccxt.WatchTrade, error) {
-	if b.wsClient == nil {
-		return nil, ccxt.NewNotSupported("WebSocket not enabled")
+// WatchTrade 观察交易数据
+func (b *Binance) WatchTrade(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchTrade, error) {
+	if b.wsPool == nil {
+		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
 
-	// 获取原始的交易数组channel
-	tradesChan, err := b.wsClient.WatchTrades(ctx, symbol, since, limit, params)
-	if err != nil {
-		return nil, err
-	}
-
-	// 创建单个交易的channel来匹配接口
-	singleTradeChan := make(chan *ccxt.WatchTrade, 1000)
-	go func() {
-		defer close(singleTradeChan)
-		for trades := range tradesChan {
-			for _, trade := range trades {
-				singleTradeChan <- &trade
-			}
-		}
-	}()
-
-	return singleTradeChan, nil
+	return b.wsPool.WatchTrades(ctx, symbol, params)
 }
 
 // WatchOHLCV 观察K线数据
-func (b *Binance) WatchOHLCV(ctx context.Context, symbol, timeframe string, since int64, limit int, params map[string]interface{}) (<-chan *ccxt.WatchOHLCV, error) {
-	if b.wsClient == nil {
-		return nil, ccxt.NewNotSupported("WebSocket not enabled")
+func (b *Binance) WatchOHLCV(ctx context.Context, symbol, timeframe string, params map[string]interface{}) (string, <-chan *ccxt.WatchOHLCV, error) {
+	if b.wsPool == nil {
+		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
 
-	// 获取原始的K线数组channel
-	ohlcvsChan, err := b.wsClient.WatchOHLCV(ctx, symbol, timeframe, since, limit, params)
-	if err != nil {
-		return nil, err
-	}
-
-	// 创建单个K线的channel来匹配接口
-	singleOHLCVChan := make(chan *ccxt.WatchOHLCV, 1000)
-	go func() {
-		defer close(singleOHLCVChan)
-		for ohlcvs := range ohlcvsChan {
-			for _, ohlcv := range ohlcvs {
-				singleOHLCVChan <- &ohlcv
-			}
-		}
-	}()
-
-	return singleOHLCVChan, nil
+	return b.wsPool.WatchOHLCV(ctx, symbol, timeframe, params)
 }
 
 // WatchBalance 观察账户余额
-func (b *Binance) WatchBalance(ctx context.Context, params map[string]interface{}) (<-chan *ccxt.WatchBalance, error) {
-	if b.wsClient == nil {
-		return nil, ccxt.NewNotSupported("WebSocket not enabled")
+func (b *Binance) WatchBalance(ctx context.Context, params map[string]interface{}) (string, <-chan *ccxt.WatchBalance, error) {
+	if b.wsPool == nil {
+		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
-	return b.wsClient.WatchBalance(ctx, params)
+	return b.wsPool.WatchBalance(ctx, params)
 }
 
 // WatchOrders 观察订单状态
-func (b *Binance) WatchOrders(ctx context.Context, symbol string, since int64, limit int, params map[string]interface{}) (<-chan *ccxt.WatchOrder, error) {
-	if b.wsClient == nil {
-		return nil, ccxt.NewNotSupported("WebSocket not enabled")
+func (b *Binance) WatchOrders(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchOrder, error) {
+	if b.wsPool == nil {
+		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
 
-	// 获取原始的订单数组channel
-	ordersChan, err := b.wsClient.WatchOrders(ctx, symbol, since, limit, params)
-	if err != nil {
-		return nil, err
-	}
-
-	// 创建单个订单的channel来匹配接口
-	singleOrderChan := make(chan *ccxt.WatchOrder, 1000)
-	go func() {
-		defer close(singleOrderChan)
-		for orders := range ordersChan {
-			for _, order := range orders {
-				singleOrderChan <- &order
-			}
-		}
-	}()
-
-	return singleOrderChan, nil
+	return b.wsPool.WatchOrders(ctx, params)
 }

@@ -99,9 +99,62 @@ func (q *QuestDBStorage) startBackgroundServices() error {
 	return nil
 }
 
+// recreateTablesIfNeeded 检查并重建有问题的表
+func (q *QuestDBStorage) recreateTablesIfNeeded(ctx context.Context) error {
+	logger.Ctx(ctx).Info("检查表结构...")
+
+	// 检查trades表的列结构
+	rows, err := q.db.QueryContext(ctx, "SHOW COLUMNS FROM trades")
+	if err != nil {
+		// 表不存在，无需重建
+		logger.Ctx(ctx).Debug("trades表不存在，将创建新表")
+		return nil
+	}
+	defer rows.Close()
+
+	// 检查是否有quantity列
+	hasQuantityColumn := false
+	for rows.Next() {
+		var columnName, dataType string
+		var indexed, designated bool
+		if err := rows.Scan(&columnName, &dataType, &indexed, &designated); err != nil {
+			continue
+		}
+		if columnName == "quantity" {
+			hasQuantityColumn = true
+			break
+		}
+	}
+
+	// 如果没有quantity列，重建表
+	if !hasQuantityColumn {
+		logger.Ctx(ctx).Info("trades表结构不正确，重建表...")
+
+		// 备份旧数据（如果有的话）
+		backupQuery := `CREATE TABLE trades_backup AS (SELECT * FROM trades)`
+		if _, err := q.db.ExecContext(ctx, backupQuery); err != nil {
+			logger.Ctx(ctx).Debug("无法备份trades表数据", zap.Error(err))
+		}
+
+		// 删除旧表
+		if _, err := q.db.ExecContext(ctx, "DROP TABLE IF EXISTS trades"); err != nil {
+			return fmt.Errorf("failed to drop trades table: %w", err)
+		}
+
+		logger.Ctx(ctx).Info("trades表已重建")
+	}
+
+	return nil
+}
+
 // initTables 初始化表结构
 func (q *QuestDBStorage) initTables(ctx context.Context) error {
 	logger.Ctx(ctx).Info("初始化数据库表结构...")
+
+	// 检查并重建有问题的表
+	if err := q.recreateTablesIfNeeded(ctx); err != nil {
+		logger.Ctx(ctx).Warn("重建表失败，继续使用现有表", zap.Error(err))
+	}
 
 	// 创建多个时间周期的K线数据表
 	timeframes := []string{"1m", "5m", "15m", "1h", "4h", "1d"}

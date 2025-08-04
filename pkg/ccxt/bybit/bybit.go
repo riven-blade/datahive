@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"datahive/pkg/ccxt"
+
+	"github.com/spf13/cast"
 )
 
 // 注册Bybit交易所
@@ -1576,7 +1578,21 @@ func (b *Bybit) loadMarketsIfNeeded(ctx context.Context) error {
 // getMarket 获取市场信息
 func (b *Bybit) getMarket(symbol string) *ccxt.Market {
 	markets := b.BaseExchange.GetMarkets()
-	return markets[symbol]
+
+	// 1. 先尝试直接查找
+	if market, exists := markets[symbol]; exists {
+		return market
+	}
+
+	// 2. 如果没找到，尝试格式化symbol再查找
+	formattedSymbol := b.FormatSymbol(symbol)
+	for _, market := range markets {
+		if market.ID == formattedSymbol {
+			return market
+		}
+	}
+
+	return nil
 }
 
 // getMarketCategory 根据市场类型获取category
@@ -1830,6 +1846,15 @@ func (b *Bybit) formatAmount(amount float64, market *ccxt.Market) string {
 	return fmt.Sprintf("%.8f", amount)
 }
 
+// FormatSymbol 标准化交易对格式
+func (b *Bybit) FormatSymbol(symbol string) string {
+	// 移除所有分隔符并转为大写
+	symbol = strings.ReplaceAll(symbol, "/", "")
+	symbol = strings.ReplaceAll(symbol, "-", "")
+	symbol = strings.ReplaceAll(symbol, "_", "")
+	return strings.ToUpper(symbol)
+}
+
 // formatPrice 格式化价格
 func (b *Bybit) formatPrice(price float64, market *ccxt.Market) string {
 	if market != nil && market.Precision.Price > 0 {
@@ -1841,4 +1866,64 @@ func (b *Bybit) formatPrice(price float64, market *ccxt.Market) string {
 // PrivateAPI 私有API请求
 func (b *Bybit) PrivateAPI(ctx context.Context, method, endpoint string, params map[string]interface{}) (interface{}, error) {
 	return nil, ccxt.NewNotSupported("PrivateAPI")
+}
+
+// ========== WebSocket Watch 方法 ==========
+
+// WatchPrice 观察单个交易对的价格
+func (b *Bybit) WatchPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchPrice, error) {
+	return "", nil, ccxt.NewNotSupported("WatchPrice not implemented for Bybit yet")
+}
+
+// WatchOHLCV 观察K线数据
+func (b *Bybit) WatchOHLCV(ctx context.Context, symbol, timeframe string, params map[string]interface{}) (string, <-chan *ccxt.WatchOHLCV, error) {
+	return "", nil, ccxt.NewNotSupported("WatchOHLCV not implemented for Bybit yet")
+}
+
+// WatchTrade 观察交易数据
+func (b *Bybit) WatchTrade(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchTrade, error) {
+	return "", nil, ccxt.NewNotSupported("WatchTrade not implemented for Bybit yet")
+}
+
+// WatchOrderBook 观察订单簿
+func (b *Bybit) WatchOrderBook(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchOrderBook, error) {
+	return "", nil, ccxt.NewNotSupported("WatchOrderBook not implemented for Bybit yet")
+}
+
+// WatchBalance 观察账户余额
+func (b *Bybit) WatchBalance(ctx context.Context, params map[string]interface{}) (string, <-chan *ccxt.WatchBalance, error) {
+	return "", nil, ccxt.NewNotSupported("WatchBalance not implemented for Bybit yet")
+}
+
+// WatchOrders 观察订单状态
+func (b *Bybit) WatchOrders(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchOrder, error) {
+	return "", nil, ccxt.NewNotSupported("WatchOrders not implemented for Bybit yet")
+}
+
+// GenerateChannel 生成 Bybit 特定的 WebSocket channel 名称
+func (b *Bybit) GenerateChannel(symbol string, params map[string]interface{}) string {
+	// 转换 symbol 为 Bybit 格式 (BTC/USDT -> BTCUSDT)
+	bybitSymbol := strings.ToUpper(strings.ReplaceAll(symbol, "/", ""))
+
+	eventType := cast.ToString(params["eventType"])
+
+	switch strings.ToLower(eventType) {
+	case "ticker":
+		return fmt.Sprintf("tickers.%s", bybitSymbol)
+	case "kline":
+		interval := cast.ToString(params["interval"])
+		if interval == "" {
+			interval = "1"
+		}
+		return fmt.Sprintf("klineV2.%s.%s", interval, bybitSymbol)
+	case "trade":
+		return fmt.Sprintf("trade.%s", bybitSymbol)
+	case "orderbook", "depth":
+		if depth := cast.ToInt(params["depth"]); depth > 0 {
+			return fmt.Sprintf("orderBookL2_%d.%s", depth, bybitSymbol)
+		}
+		return fmt.Sprintf("orderBookL2_25.%s", bybitSymbol)
+	default:
+		return fmt.Sprintf("%s.%s", strings.ToLower(eventType), bybitSymbol)
+	}
 }

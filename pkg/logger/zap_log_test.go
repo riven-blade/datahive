@@ -25,7 +25,7 @@ func (n username) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 
 func TestLog(t *testing.T) {
 	ts := newTestLogSpy(t)
-	conf := &Config{Level: "debug", DisableTimestamp: true}
+	conf := &Config{Level: "debug", Format: "text", DisableTimestamp: true}
 	logger, _, _ := InitTestLogger(ts, conf)
 	sugar := logger.Sugar()
 	defer func() {
@@ -230,7 +230,7 @@ func TestNamedLogger(t *testing.T) {
 
 func TestErrorLog(t *testing.T) {
 	ts := newTestLogSpy(t)
-	conf := &Config{Level: "debug", DisableTimestamp: true}
+	conf := &Config{Level: "debug", Format: "text", DisableTimestamp: true}
 	logger, _, _ := InitTestLogger(ts, conf)
 	logger.Error("", zap.NamedError("err", errors.New("log-stack-test")))
 	ts.assertMessagesContains("[err=log-stack-test]")

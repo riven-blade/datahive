@@ -36,7 +36,6 @@ questdb:
   healthCheckInterval: "30s"
   enableAutoReconnect: true
 
-# Redis Configuration (缓存)
 redis:
   host: "localhost"
   port: 6379
@@ -56,6 +55,8 @@ exchanges:
     secret: ""
     testnet: false
     rateLimit: 1200
+    enableWebSocket: true
+    wsMaxReconnect: 5
 
   bybit:
     enabled: true
@@ -63,11 +64,13 @@ exchanges:
     secret: ""
     testnet: false
     rateLimit: 120
+    enableWebSocket: true
+    wsMaxReconnect: 5
 
 # Logging Configuration
 logging:
-  level: "info"
-  format: "json"
+  level: "debug"
+  format: "text"
   output: "logs/datahive.log"
   maxSize: 100 # MB
   maxBackups: 7

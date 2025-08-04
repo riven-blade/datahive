@@ -28,7 +28,7 @@ type Config struct {
 	Options    map[string]interface{} `json:"options"`    // 其他选项
 
 	// 市场类型配置
-	DefaultType string `json:"defaultType"` // 默认市场类型: spot, margin, future
+	MarketType string `json:"marketType"` // 市场类型: spot, margin, futures
 
 	// WebSocket 配置
 	EnableWebSocket bool `json:"enableWebSocket"` // 是否启用WebSocket
@@ -46,7 +46,7 @@ func DefaultConfig() *Config {
 		UserAgent:       "ccxt-go-binance/1.0",
 		Headers:         make(map[string]string),
 		Options:         make(map[string]interface{}),
-		DefaultType:     "spot",
+		MarketType:      "spot",
 		EnableWebSocket: false,
 		WSMaxReconnect:  3,
 	}
@@ -74,8 +74,8 @@ func (c *Config) Validate() error {
 		"option": true,
 	}
 
-	if !validTypes[c.DefaultType] {
-		return fmt.Errorf("invalid defaultType: %s", c.DefaultType)
+	if !validTypes[c.MarketType] {
+		return fmt.Errorf("invalid marketType: %s", c.MarketType)
 	}
 
 	return nil
@@ -212,9 +212,9 @@ func (b *ConfigBuilder) WithUserAgent(userAgent string) *ConfigBuilder {
 	return b
 }
 
-// WithDefaultType 设置默认市场类型
-func (b *ConfigBuilder) WithDefaultType(marketType string) *ConfigBuilder {
-	b.config.DefaultType = marketType
+// WithMarketType 设置市场类型
+func (b *ConfigBuilder) WithMarketType(marketType string) *ConfigBuilder {
+	b.config.MarketType = marketType
 	return b
 }
 

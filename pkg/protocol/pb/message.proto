@@ -13,7 +13,7 @@ message Message {
   string id = 1;           // 消息ID
   ActionType action = 2;   // 动作类型
   MessageType type = 3;    // 消息类型
-  bytes payload = 4;       // 消息载荷
+  bytes data = 4;          // 消息载荷
   int64 timestamp = 5;     // 时间戳
 }
 
@@ -34,9 +34,10 @@ enum ActionType {
   // 数据获取
   FETCH_MARKETS = 10;
   FETCH_TICKER = 11;
-  FETCH_KLINES = 12;
-  FETCH_TRADES = 13;
-  FETCH_ORDERBOOK = 14;
+  FETCH_TICKERS = 12;
+  FETCH_KLINES = 13;
+  FETCH_TRADES = 14;
+  FETCH_ORDERBOOK = 15;
   
   // 数据推送
   MARKET_UPDATE = 20;
@@ -131,44 +132,42 @@ message PriceLevel {
 
 
 
+
+
 // =====================================================================================
 // 订阅管理
 // =====================================================================================
+
+// DataType 数据类型枚举
+enum DataType {
+  TICKER = 0;      // 行情数据
+  KLINE = 1;       // K线数据
+  TRADE = 2;       // 交易数据
+  ORDERBOOK = 3;   // 订单簿数据
+}
 
 // SubscribeRequest 订阅请求
 message SubscribeRequest {
   string exchange = 1;            // 交易所名称
   string market_type = 2;         // 市场类型: spot, futures, swap
-  repeated string symbols = 3;    // 交易对列表
+  string symbol = 3;              // 单个交易对
+  DataType data_type = 4;         // 数据类型
   
-  // 数据类型
-  bool ticker = 4;                // 是否订阅行情
-  bool kline = 5;                 // 是否订阅K线
-  bool trade = 6;                 // 是否订阅交易
-  bool orderbook = 7;             // 是否订阅订单簿
-  
-  // 参数
-  string kline_interval = 8;      // K线间隔: 1m, 5m, 1h等
-  int32 orderbook_depth = 9;      // 订单簿深度
+  // 可选参数
+  string kline_interval = 5;      // K线间隔: 1m, 5m, 1h等 (仅当data_type=KLINE时有效)
+  int32 orderbook_depth = 6;      // 订单簿深度 (仅当data_type=ORDERBOOK时有效)
 }
 
 // SubscribeResponse 订阅响应
 message SubscribeResponse {
   bool success = 1;
   string message = 2;
+  string topic = 3;  // 订阅topic，用于后续取消订阅
 }
 
 // UnsubscribeRequest 取消订阅请求
 message UnsubscribeRequest {
-  string exchange = 1;                // 交易所名称
-  string market_type = 2;             // 市场类型: spot, futures, swap
-  repeated string symbols = 3;        // 要取消订阅的交易对列表
-  
-  // 要取消的数据类型
-  bool ticker = 4;                    // 是否取消ticker订阅
-  bool kline = 5;                     // 是否取消K线订阅
-  bool trade = 6;                     // 是否取消交易订阅
-  bool orderbook = 7;                 // 是否取消订单簿订阅
+  string topic = 1;         // 订阅topic（直接使用topic字符串）
 }
 
 // UnsubscribeResponse 取消订阅响应
@@ -185,6 +184,7 @@ message UnsubscribeResponse {
 message FetchMarketsRequest {
   string exchange = 1;
   string market_type = 2;         // 过滤市场类型
+  string stack_type = 3;          // 质押物类型
 }
 
 // FetchMarketsResponse 获取市场信息响应
@@ -196,10 +196,23 @@ message FetchMarketsResponse {
 message FetchTickerRequest {
   string exchange = 1;
   string symbol = 2;
+  string market_type = 3;         // 市场类型
 }
 
 // FetchTickerResponse 获取行情响应
 message FetchTickerResponse {
+  Ticker ticker = 1;
+}
+
+// FetchTickersRequest 获取单个行情请求
+message FetchTickersRequest {
+  string exchange = 1;
+  string symbol = 2;
+  string market_type = 3;         // 市场类型
+}
+
+// FetchTickersResponse 获取单个行情响应
+message FetchTickersResponse {
   Ticker ticker = 1;
 }
 
@@ -211,6 +224,7 @@ message FetchKlinesRequest {
   int64 start_time = 4;
   int64 end_time = 5;
   int32 limit = 6;
+  string market_type = 7;         // 市场类型
 }
 
 // FetchKlinesResponse 获取K线响应
@@ -224,6 +238,7 @@ message FetchTradesRequest {
   string symbol = 2;
   int64 since = 3;
   int32 limit = 4;
+  string market_type = 5;         // 市场类型
 }
 
 // FetchTradesResponse 获取交易记录响应
@@ -236,6 +251,7 @@ message FetchOrderBookRequest {
   string exchange = 1;
   string symbol = 2;
   int32 limit = 3;
+  string market_type = 4;         // 市场类型
 }
 
 // FetchOrderBookResponse 获取订单簿响应
@@ -249,24 +265,24 @@ message FetchOrderBookResponse {
 
 // TickerUpdate 行情更新推送
 message TickerUpdate {
-  string subscription_id = 1;
+  string topic = 1;        // 订阅topic作为唯一标识
   Ticker ticker = 2;
 }
 
 // KlineUpdate K线更新推送
 message KlineUpdate {
-  string subscription_id = 1;
+  string topic = 1;        // 订阅topic作为唯一标识
   Kline kline = 2;
 }
 
 // TradeUpdate 交易更新推送
 message TradeUpdate {
-  string subscription_id = 1;
+  string topic = 1;        // 订阅topic作为唯一标识
   Trade trade = 2;
 }
 
 // OrderBookUpdate 订单簿更新推送
 message OrderBookUpdate {
-  string subscription_id = 1;
+  string topic = 1;        // 订阅topic作为唯一标识
   OrderBook orderbook = 2;
-} 
+}

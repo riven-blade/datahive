@@ -9,6 +9,7 @@ import (
 
 	"datahive/pkg/logger"
 	"datahive/pkg/protocol"
+	"datahive/pkg/protocol/pb"
 
 	"github.com/panjf2000/gnet/v2"
 	"go.uber.org/zap"
@@ -33,9 +34,9 @@ type Transport interface {
 	Start() error
 	Stop() error
 	IsRunning() bool
-	RegisterHandler(action protocol.ActionType, handler MessageHandler)
-	UnregisterHandler(action protocol.ActionType)
-	Broadcast(action protocol.ActionType, data []byte) error
+	RegisterHandler(action pb.ActionType, handler MessageHandler)
+	UnregisterHandler(action pb.ActionType)
+	Broadcast(action pb.ActionType, data []byte, topic string) error
 	GetStats() *TransportStats
 	GetConnectionCount() int
 	GetAllConnections() []Connection
@@ -266,35 +267,60 @@ func (t *GNetTransport) OnTraffic(c gnet.Conn) gnet.Action {
 }
 
 // RegisterHandler 注册处理器
-func (t *GNetTransport) RegisterHandler(action protocol.ActionType, handler MessageHandler) {
+func (t *GNetTransport) RegisterHandler(action pb.ActionType, handler MessageHandler) {
 	t.router.RegisterHandler(action, handler)
 }
 
 // UnregisterHandler 取消注册处理器
-func (t *GNetTransport) UnregisterHandler(action protocol.ActionType) {
+func (t *GNetTransport) UnregisterHandler(action pb.ActionType) {
 	t.router.UnregisterHandler(action)
 }
 
 // Broadcast 广播消息
-func (t *GNetTransport) Broadcast(action protocol.ActionType, data []byte) error {
-	msg := protocol.NewNotificationMessage(action, data)
+func (t *GNetTransport) Broadcast(action pb.ActionType, data []byte, topic string) error {
+	builder := protocol.NewBuilder()
+	msg, err := builder.NewNotification(action, nil)
+	if err != nil {
+		return err
+	}
+	msg.Data = data
 
 	t.connectionsMu.RLock()
-	connectionCount := len(t.connections)
-	connections := make([]*GNetConnection, 0, connectionCount)
-	for _, conn := range t.connections {
-		connections = append(connections, conn)
+	var connections []*GNetConnection
+	totalConnections := len(t.connections)
+
+	// 如果指定了topic，只向订阅了该topic的连接发送
+	if topic != "" {
+		for _, conn := range t.connections {
+			if conn.HasTopic(topic) {
+				connections = append(connections, conn)
+			}
+		}
+	} else {
+		// 如果topic为空，向所有连接广播
+		connections = make([]*GNetConnection, 0, totalConnections)
+		for _, conn := range t.connections {
+			connections = append(connections, conn)
+		}
 	}
 	t.connectionsMu.RUnlock()
 
 	logger.Ctx(t.ctx).Debug("开始广播消息",
 		zap.String("action", action.String()),
-		zap.Int("connection_count", connectionCount),
+		zap.String("topic", topic),
+		zap.Int("target_connections", len(connections)),
+		zap.Int("total_connections", totalConnections),
 		zap.Int("data_size", len(data)))
 
-	if connectionCount == 0 {
-		logger.Ctx(t.ctx).Warn("没有活跃连接，无法广播消息",
-			zap.String("action", action.String()))
+	if len(connections) == 0 {
+		if topic != "" {
+			logger.Ctx(t.ctx).Debug("没有连接订阅该topic",
+				zap.String("action", action.String()),
+				zap.String("topic", topic))
+		} else {
+			logger.Ctx(t.ctx).Warn("没有活跃连接，无法广播消息",
+				zap.String("action", action.String()))
+		}
 		return nil // 没有连接不算错误
 	}
 
@@ -302,19 +328,31 @@ func (t *GNetTransport) Broadcast(action protocol.ActionType, data []byte) error
 	var wg sync.WaitGroup
 
 	for _, conn := range connections {
+		if conn == nil {
+			continue // 跳过 nil 连接
+		}
+
 		wg.Add(1)
 		go func(c *GNetConnection) {
 			defer wg.Done()
+
+			// 再次检查连接是否有效
+			if c == nil || c.IsClosed() {
+				return
+			}
+
 			if err := c.WriteMessage(msg); err != nil {
 				atomic.AddInt64(&errorCount, 1)
 				logger.Ctx(t.ctx).Warn("向连接广播消息失败",
 					zap.String("action", action.String()),
+					zap.String("topic", topic),
 					zap.String("remote", c.GetRemote()),
 					zap.Error(err))
 			} else {
 				atomic.AddInt64(&t.stats.MessagesSent, 1)
 				logger.Ctx(t.ctx).Debug("消息成功发送到连接",
 					zap.String("action", action.String()),
+					zap.String("topic", topic),
 					zap.String("remote", c.GetRemote()))
 			}
 		}(conn)
@@ -325,14 +363,16 @@ func (t *GNetTransport) Broadcast(action protocol.ActionType, data []byte) error
 	if errorCount > 0 {
 		logger.Ctx(t.ctx).Error("广播消息时出现错误",
 			zap.String("action", action.String()),
+			zap.String("topic", topic),
 			zap.Int64("error_count", errorCount),
-			zap.Int("total_connections", connectionCount))
+			zap.Int("target_connections", len(connections)))
 		return fmt.Errorf("failed to broadcast to %d connections", errorCount)
 	}
 
 	logger.Ctx(t.ctx).Debug("消息广播完成",
 		zap.String("action", action.String()),
-		zap.Int("successful_sends", connectionCount))
+		zap.String("topic", topic),
+		zap.Int("successful_sends", len(connections)))
 
 	return nil
 }

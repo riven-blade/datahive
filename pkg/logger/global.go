@@ -124,3 +124,61 @@ func WithErrorLevel(ctx context.Context) context.Context {
 func WithFatalLevel(ctx context.Context) context.Context {
 	return withLogLevel(ctx, zapcore.FatalLevel)
 }
+
+// ========== 全局日志函数 ==========
+
+func Debug(msg string, fields ...zap.Field) {
+	debugL().Debug(msg, fields...)
+}
+
+// Info logs a message at InfoLevel.
+func Info(msg string, fields ...zap.Field) {
+	infoL().Info(msg, fields...)
+}
+
+// Warn logs a message at WarnLevel.
+func Warn(msg string, fields ...zap.Field) {
+	warnL().Warn(msg, fields...)
+}
+
+// Error logs a message at ErrorLevel.
+func Error(msg string, fields ...zap.Field) {
+	errorL().Error(msg, fields...)
+}
+
+// Panic logs a message at PanicLevel and panics.
+func Panic(msg string, fields ...zap.Field) {
+	L().Panic(msg, fields...)
+}
+
+// With creates a child logger and adds structured context to it.
+func With(fields ...zap.Field) *MLogger {
+	return &MLogger{Logger: L().With(fields...)}
+}
+
+// RatedDebug logs a message at DebugLevel with rate limiting.
+func RatedDebug(cost float64, msg string, fields ...zap.Field) bool {
+	if R().CheckCredit(cost) {
+		debugL().Debug(msg, fields...)
+		return true
+	}
+	return false
+}
+
+// RatedInfo logs a message at InfoLevel with rate limiting.
+func RatedInfo(cost float64, msg string, fields ...zap.Field) bool {
+	if R().CheckCredit(cost) {
+		infoL().Info(msg, fields...)
+		return true
+	}
+	return false
+}
+
+// RatedWarn logs a message at WarnLevel with rate limiting.
+func RatedWarn(cost float64, msg string, fields ...zap.Field) bool {
+	if R().CheckCredit(cost) {
+		warnL().Warn(msg, fields...)
+		return true
+	}
+	return false
+}

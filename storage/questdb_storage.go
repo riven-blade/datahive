@@ -3,13 +3,14 @@ package storage
 import (
 	"context"
 	"database/sql"
-	"datahive/config"
-	"datahive/pkg/logger"
-	"datahive/pkg/protocol"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"datahive/config"
+	"datahive/pkg/logger"
+	"datahive/pkg/protocol/pb"
 
 	_ "github.com/lib/pq"
 	"go.uber.org/zap"
@@ -47,9 +48,9 @@ type BatchProcessor struct {
 	maxMemoryMB   int64 // 最大内存使用量(MB)
 
 	// 各类型数据批次
-	klineBatch  []*protocol.Kline
-	tradeBatch  []*protocol.Trade
-	tickerBatch []*protocol.Ticker
+	klineBatch  []*pb.Kline
+	tradeBatch  []*pb.Trade
+	tickerBatch []*pb.Ticker
 
 	// 互斥锁
 	klineMu  sync.Mutex
@@ -104,8 +105,8 @@ type StorageStats struct {
 	QueriesPerSecond float64
 }
 
-// NewQuestDBStorage 创建 QuestDB 存储实例
-func NewQuestDBStorage(conf *config.QuestDBConfig) *QuestDBStorage {
+// NewQuestDBStorage 创建并连接 QuestDB 存储实例
+func NewQuestDBStorage(ctx context.Context, conf *config.QuestDBConfig) (*QuestDBStorage, error) {
 	if conf == nil {
 		conf = config.NewQuestDBConfig()
 	}
@@ -136,7 +137,23 @@ func NewQuestDBStorage(conf *config.QuestDBConfig) *QuestDBStorage {
 		stopChan:      make(chan struct{}),
 	}
 
-	return storage
+	// 立即建立连接
+	if err := storage.Connect(ctx); err != nil {
+		return nil, ErrConnectionError("failed to initialize QuestDB storage", err)
+	}
+
+	// 启动优雅退出监听
+	go func() {
+		<-ctx.Done()
+		logger.Ctx(context.Background()).Info("收到退出信号，开始优雅关闭QuestDB存储...")
+		if err := storage.Close(); err != nil {
+			logger.Ctx(context.Background()).Error("QuestDB存储关闭失败", zap.Error(err))
+		} else {
+			logger.Ctx(context.Background()).Info("QuestDB存储已优雅关闭")
+		}
+	}()
+
+	return storage, nil
 }
 
 // Connect 连接到 QuestDB
@@ -228,7 +245,7 @@ func (q *QuestDBStorage) IsHealthy() bool {
 }
 
 // SaveKlines 保存K线数据
-func (q *QuestDBStorage) SaveKlines(ctx context.Context, exchange string, klines []*protocol.Kline) error {
+func (q *QuestDBStorage) SaveKlines(ctx context.Context, exchange string, klines []*pb.Kline) error {
 	if !q.IsHealthy() {
 		q.recordFailedOperation("storage not healthy")
 		return ErrStorageNotHealthy
@@ -241,7 +258,7 @@ func (q *QuestDBStorage) SaveKlines(ctx context.Context, exchange string, klines
 	start := time.Now()
 
 	// 数据验证
-	validKlines := make([]*protocol.Kline, 0, len(klines))
+	validKlines := make([]*pb.Kline, 0, len(klines))
 	for _, kline := range klines {
 		if err := q.typeConverter.ValidateKlineData(kline); err != nil {
 			logger.Ctx(ctx).Warn("Invalid kline data",
@@ -274,7 +291,7 @@ func (q *QuestDBStorage) SaveKlines(ctx context.Context, exchange string, klines
 }
 
 // QueryKlines 查询K线数据
-func (q *QuestDBStorage) QueryKlines(ctx context.Context, exchange, symbol, timeframe string, start int64, limit int) ([]*protocol.Kline, error) {
+func (q *QuestDBStorage) QueryKlines(ctx context.Context, exchange, symbol, timeframe string, start int64, limit int) ([]*pb.Kline, error) {
 	if !q.IsHealthy() {
 		q.recordFailedOperation("storage not healthy")
 		return nil, ErrStorageNotHealthy
@@ -313,9 +330,9 @@ func (q *QuestDBStorage) QueryKlines(ctx context.Context, exchange, symbol, time
 	}
 	defer rows.Close()
 
-	var klines []*protocol.Kline
+	var klines []*pb.Kline
 	for rows.Next() {
-		kline := &protocol.Kline{}
+		kline := &pb.Kline{}
 		var openTime time.Time
 
 		err := rows.Scan(&kline.Exchange, &kline.Symbol, &kline.Timeframe,
@@ -348,7 +365,7 @@ func (q *QuestDBStorage) QueryKlines(ctx context.Context, exchange, symbol, time
 }
 
 // SaveTrades 保存交易数据
-func (q *QuestDBStorage) SaveTrades(ctx context.Context, exchange string, trades []*protocol.Trade) error {
+func (q *QuestDBStorage) SaveTrades(ctx context.Context, exchange string, trades []*pb.Trade) error {
 	if !q.IsHealthy() {
 		q.recordFailedOperation("storage not healthy")
 		return ErrStorageNotHealthy
@@ -361,7 +378,7 @@ func (q *QuestDBStorage) SaveTrades(ctx context.Context, exchange string, trades
 	start := time.Now()
 
 	// 数据验证
-	validTrades := make([]*protocol.Trade, 0, len(trades))
+	validTrades := make([]*pb.Trade, 0, len(trades))
 	for _, trade := range trades {
 		if err := q.typeConverter.ValidateTradeData(trade); err != nil {
 			logger.Ctx(ctx).Warn("Invalid trade data",
@@ -395,7 +412,7 @@ func (q *QuestDBStorage) SaveTrades(ctx context.Context, exchange string, trades
 }
 
 // QueryTrades 查询交易数据
-func (q *QuestDBStorage) QueryTrades(ctx context.Context, exchange, symbol string, start int64, limit int) ([]*protocol.Trade, error) {
+func (q *QuestDBStorage) QueryTrades(ctx context.Context, exchange, symbol string, start int64, limit int) ([]*pb.Trade, error) {
 	if !q.IsHealthy() {
 		q.recordFailedOperation("storage not healthy")
 		return nil, ErrStorageNotHealthy
@@ -433,9 +450,9 @@ func (q *QuestDBStorage) QueryTrades(ctx context.Context, exchange, symbol strin
 	}
 	defer rows.Close()
 
-	var trades []*protocol.Trade
+	var trades []*pb.Trade
 	for rows.Next() {
-		trade := &protocol.Trade{}
+		trade := &pb.Trade{}
 		var timestamp time.Time
 
 		err := rows.Scan(&trade.Exchange, &trade.Symbol, &trade.Id,
@@ -465,7 +482,7 @@ func (q *QuestDBStorage) QueryTrades(ctx context.Context, exchange, symbol strin
 }
 
 // SaveTickers 保存价格数据
-func (q *QuestDBStorage) SaveTickers(ctx context.Context, exchange string, tickers []*protocol.Ticker) error {
+func (q *QuestDBStorage) SaveTickers(ctx context.Context, exchange string, tickers []*pb.Ticker) error {
 	if !q.IsHealthy() {
 		q.recordFailedOperation("storage not healthy")
 		return ErrStorageNotHealthy
@@ -478,7 +495,7 @@ func (q *QuestDBStorage) SaveTickers(ctx context.Context, exchange string, ticke
 	start := time.Now()
 
 	// 数据验证并设置exchange字段
-	validTickers := make([]*protocol.Ticker, 0, len(tickers))
+	validTickers := make([]*pb.Ticker, 0, len(tickers))
 	for _, ticker := range tickers {
 		if err := q.typeConverter.ValidateTickerData(ticker); err != nil {
 			logger.Ctx(ctx).Warn("Invalid ticker data",
@@ -511,7 +528,7 @@ func (q *QuestDBStorage) SaveTickers(ctx context.Context, exchange string, ticke
 }
 
 // QueryTickers 查询价格数据
-func (q *QuestDBStorage) QueryTickers(ctx context.Context, exchange, symbol string, start int64, limit int) ([]*protocol.Ticker, error) {
+func (q *QuestDBStorage) QueryTickers(ctx context.Context, exchange, symbol string, start int64, limit int) ([]*pb.Ticker, error) {
 	if !q.IsHealthy() {
 		q.recordFailedOperation("storage not healthy")
 		return nil, ErrStorageNotHealthy
@@ -549,9 +566,9 @@ func (q *QuestDBStorage) QueryTickers(ctx context.Context, exchange, symbol stri
 	}
 	defer rows.Close()
 
-	var tickers []*protocol.Ticker
+	var tickers []*pb.Ticker
 	for rows.Next() {
-		ticker := &protocol.Ticker{}
+		ticker := &pb.Ticker{}
 		var timestamp time.Time
 
 		err := rows.Scan(&ticker.Symbol, &timestamp, &ticker.Last, &ticker.Bid,

@@ -7,9 +7,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"datahive/pkg/logger"
 	"datahive/pkg/protocol"
+	"datahive/pkg/protocol/pb"
 
 	"github.com/panjf2000/gnet/v2"
+	"go.uber.org/zap"
 )
 
 // ConnectionStats 连接统计信息
@@ -25,21 +28,21 @@ type ConnectionStats struct {
 
 // Connection 统一连接接口
 type Connection interface {
-	WriteMessage(msg *protocol.Message) error
-	ReadMessage() (*protocol.Message, error)
+	WriteMessage(msg *pb.Message) error
+	ReadMessage() (*pb.Message, error)
 	Close() error
 	IsClosed() bool
 	IsHealthy() bool
 	GetRemote() string
 	GetLocal() string
 
-	SendRequest(action protocol.ActionType, data []byte) (*protocol.Message, error)
-	SendResponse(action protocol.ActionType, requestID string, data []byte) error
-	SendNotification(action protocol.ActionType, data []byte) error
+	SendRequest(action pb.ActionType, data []byte) (*pb.Message, error)
+	SendResponse(action pb.ActionType, requestID string, data []byte) error
+	SendNotification(action pb.ActionType, data []byte) error
 	SendError(requestID string, code int32, message string) error
 
-	RegisterHandler(action protocol.ActionType, handler MessageHandler) error
-	UnregisterHandler(action protocol.ActionType) error
+	RegisterHandler(action pb.ActionType, handler MessageHandler) error
+	UnregisterHandler(action pb.ActionType) error
 
 	Subscribe(topic string) error
 	Unsubscribe(topic string) error
@@ -49,7 +52,7 @@ type Connection interface {
 }
 
 // MessageHandler 消息处理器
-type MessageHandler func(conn Connection, msg *protocol.Message) error
+type MessageHandler func(conn Connection, msg *pb.Message) error
 
 // ========== GNet连接实现 ==========
 
@@ -62,7 +65,7 @@ type GNetConnection struct {
 	router Router
 
 	// 处理器
-	handlers map[protocol.ActionType]MessageHandler
+	handlers map[pb.ActionType]MessageHandler
 	mu       sync.RWMutex
 
 	// 订阅标签
@@ -92,7 +95,7 @@ func NewGNetConnection(conn gnet.Conn, cfg *Config, router Router) *GNetConnecti
 		conn:     conn,
 		config:   cfg,
 		router:   router,
-		handlers: make(map[protocol.ActionType]MessageHandler),
+		handlers: make(map[pb.ActionType]MessageHandler),
 		topics:   make(map[string]bool),
 		buffer:   make([]byte, 0, 8192), // 初始化缓冲区
 		stats: &ConnectionStats{
@@ -103,12 +106,13 @@ func NewGNetConnection(conn gnet.Conn, cfg *Config, router Router) *GNetConnecti
 }
 
 // WriteMessage gnet写入消息
-func (c *GNetConnection) WriteMessage(msg *protocol.Message) error {
+func (c *GNetConnection) WriteMessage(msg *pb.Message) error {
 	if c.IsClosed() {
 		return fmt.Errorf("connection closed")
 	}
 
-	data, err := protocol.Marshal(msg)
+	builder := protocol.NewBuilder()
+	data, err := builder.MarshalMessage(msg)
 	if err != nil {
 		atomic.AddInt64(&c.stats.ErrorsCount, 1)
 		return fmt.Errorf("marshal message failed: %w", err)
@@ -138,7 +142,7 @@ func (c *GNetConnection) WriteMessage(msg *protocol.Message) error {
 }
 
 // ReadMessage gnet不支持直接读取
-func (c *GNetConnection) ReadMessage() (*protocol.Message, error) {
+func (c *GNetConnection) ReadMessage() (*pb.Message, error) {
 	return nil, fmt.Errorf("use OnTraffic in gnet mode")
 }
 
@@ -204,8 +208,9 @@ func (c *GNetConnection) processBuffer() (bool, error) {
 	messageData := c.buffer[4:totalLen]
 
 	// 解析消息
-	var msg protocol.Message
-	if err := protocol.Unmarshal(messageData, &msg); err != nil {
+	var msg pb.Message
+	builder := protocol.NewBuilder()
+	if err := builder.UnmarshalMessage(messageData, &msg); err != nil {
 		return false, fmt.Errorf("unmarshal message failed: %w", err)
 	}
 
@@ -231,12 +236,25 @@ func (c *GNetConnection) processBuffer() (bool, error) {
 // Close 关闭连接
 func (c *GNetConnection) Close() error {
 	if atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
+		// 清理topics订阅 (断开连接自动清理)
+		c.topicsMu.Lock()
+		topicCount := len(c.topics)
+		c.topics = make(map[string]bool) // 清空所有订阅
+		c.topicsMu.Unlock()
+
 		// 清理缓冲区
 		c.bufferMu.Lock()
 		c.buffer = nil
 		c.headerParsed = false
 		c.expectedLen = 0
 		c.bufferMu.Unlock()
+
+		if topicCount > 0 {
+			// 记录日志
+			logger.Debug("连接关闭，自动清理topics",
+				zap.String("remote", c.GetRemote()),
+				zap.Int("topics_cleared", topicCount))
+		}
 
 		return c.conn.Close()
 	}
@@ -255,19 +273,40 @@ func (c *GNetConnection) IsHealthy() bool {
 
 // GetRemote 获取远程地址
 func (c *GNetConnection) GetRemote() string {
-	return c.conn.RemoteAddr().String()
+	if c == nil || c.conn == nil {
+		return "unknown"
+	}
+
+	if addr := c.conn.RemoteAddr(); addr != nil {
+		return addr.String()
+	}
+
+	return "unknown"
 }
 
 // GetLocal 获取本地地址
 func (c *GNetConnection) GetLocal() string {
-	return c.conn.LocalAddr().String()
+	if c == nil || c.conn == nil {
+		return "unknown"
+	}
+
+	if addr := c.conn.LocalAddr(); addr != nil {
+		return addr.String()
+	}
+
+	return "unknown"
 }
 
 // SendRequest 发送请求
-func (c *GNetConnection) SendRequest(action protocol.ActionType, data []byte) (*protocol.Message, error) {
-	msg := protocol.NewRequestMessage(action, data)
+func (c *GNetConnection) SendRequest(action pb.ActionType, data []byte) (*pb.Message, error) {
+	builder := protocol.NewBuilder()
+	msg, err := builder.NewRequest(protocol.GenerateID(), action, nil)
+	if err != nil {
+		return nil, err
+	}
+	msg.Data = data
 
-	err := c.WriteMessage(msg)
+	err = c.WriteMessage(msg)
 	if err != nil {
 		return nil, err
 	}
@@ -276,20 +315,31 @@ func (c *GNetConnection) SendRequest(action protocol.ActionType, data []byte) (*
 }
 
 // SendResponse 发送响应
-func (c *GNetConnection) SendResponse(action protocol.ActionType, requestID string, data []byte) error {
-	msg := protocol.NewResponseMessage(action, requestID, data)
+func (c *GNetConnection) SendResponse(action pb.ActionType, requestID string, data []byte) error {
+	builder := protocol.NewBuilder()
+	msg, err := builder.NewResponse(requestID, action, nil)
+	if err != nil {
+		return err
+	}
+	msg.Data = data
 	return c.WriteMessage(msg)
 }
 
 // SendNotification 发送通知
-func (c *GNetConnection) SendNotification(action protocol.ActionType, data []byte) error {
-	msg := protocol.NewNotificationMessage(action, data)
+func (c *GNetConnection) SendNotification(action pb.ActionType, data []byte) error {
+	builder := protocol.NewBuilder()
+	msg, err := builder.NewNotification(action, nil)
+	if err != nil {
+		return err
+	}
+	msg.Data = data
 	return c.WriteMessage(msg)
 }
 
 // SendError 发送错误
 func (c *GNetConnection) SendError(requestID string, code int32, message string) error {
-	msg, err := protocol.NewErrorMessage(requestID, code, message)
+	builder := protocol.NewBuilder()
+	msg, err := builder.NewError(requestID, code, message, "")
 	if err != nil {
 		return err
 	}
@@ -297,7 +347,7 @@ func (c *GNetConnection) SendError(requestID string, code int32, message string)
 }
 
 // RegisterHandler 注册处理器
-func (c *GNetConnection) RegisterHandler(action protocol.ActionType, handler MessageHandler) error {
+func (c *GNetConnection) RegisterHandler(action pb.ActionType, handler MessageHandler) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.handlers[action] = handler
@@ -305,7 +355,7 @@ func (c *GNetConnection) RegisterHandler(action protocol.ActionType, handler Mes
 }
 
 // UnregisterHandler 取消注册处理器
-func (c *GNetConnection) UnregisterHandler(action protocol.ActionType) error {
+func (c *GNetConnection) UnregisterHandler(action pb.ActionType) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.handlers, action)
@@ -341,7 +391,7 @@ func (c *GNetConnection) GetStats() *ConnectionStats {
 }
 
 // ProcessMessage 处理消息
-func (c *GNetConnection) ProcessMessage(msg *protocol.Message) error {
+func (c *GNetConnection) ProcessMessage(msg *pb.Message) error {
 	// 优先使用服务器路由器
 	if c.router != nil {
 		err := c.router.RouteMessage(c, msg)

@@ -18,9 +18,10 @@ type Exchange interface {
 	Has() map[string]bool
 	GetTimeframes() map[string]string
 
-	LoadMarkets(ctx context.Context, reload ...bool) (map[string]*Market, error)
 	Close() error
 
+	LoadMarkets(ctx context.Context, reload ...bool) (map[string]*Market, error)
+	GetMarkets() map[string]*Market
 	FetchMarkets(ctx context.Context, params map[string]interface{}) ([]*Market, error)
 	FetchCurrencies(ctx context.Context, params map[string]interface{}) (map[string]*Currency, error)
 	FetchTicker(ctx context.Context, symbol string, params map[string]interface{}) (*Ticker, error)
@@ -48,20 +49,16 @@ type Exchange interface {
 	SetLeverage(ctx context.Context, leverage int, symbol string, params map[string]interface{}) (*LeverageInfo, error)
 	SetMarginMode(ctx context.Context, marginMode, symbol string, params map[string]interface{}) (*MarginMode, error)
 
-	WatchTicker(ctx context.Context, symbol string, params map[string]interface{}) (<-chan *WatchTicker, error)
-	WatchTickers(ctx context.Context, symbols []string, params map[string]interface{}) (<-chan map[string]*WatchTicker, error)
-	WatchOHLCV(ctx context.Context, symbol, timeframe string, since int64, limit int, params map[string]interface{}) (<-chan *WatchOHLCV, error)
-	WatchTrades(ctx context.Context, symbol string, since int64, limit int, params map[string]interface{}) (<-chan *WatchTrade, error)
-	WatchOrderBook(ctx context.Context, symbol string, limit int, params map[string]interface{}) (<-chan *WatchOrderBook, error)
-	WatchBalance(ctx context.Context, params map[string]interface{}) (<-chan *WatchBalance, error)
-	WatchOrders(ctx context.Context, symbol string, since int64, limit int, params map[string]interface{}) (<-chan *WatchOrder, error)
+	WatchPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchPrice, error)
+	WatchOHLCV(ctx context.Context, symbol, timeframe string, params map[string]interface{}) (string, <-chan *WatchOHLCV, error)
+	WatchTrade(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchTrade, error)
+	WatchOrderBook(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchOrderBook, error)
+	WatchBalance(ctx context.Context, params map[string]interface{}) (string, <-chan *WatchBalance, error)
+	WatchOrders(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchOrder, error)
+
+	GenerateChannel(symbol string, params map[string]interface{}) string
 
 	Request(ctx context.Context, url string, method string, headers map[string]string, body interface{}, params map[string]interface{}) (*Response, error)
-	ParseTicker(ticker map[string]interface{}, market *Market) (*Ticker, error)
-	ParseOHLCV(ohlcv []interface{}, market *Market, timeframe string) (*OHLCV, error)
-	ParseTrade(trade map[string]interface{}, market *Market) (*Trade, error)
-	ParseOrder(order map[string]interface{}, market *Market) (*Order, error)
-	ParseBalance(response map[string]interface{}) (*Account, error)
 }
 
 // ExchangeConfig 交易所配置接口

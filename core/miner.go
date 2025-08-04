@@ -8,8 +8,10 @@ import (
 
 	"datahive/pkg/ccxt"
 	"datahive/pkg/logger"
-	"datahive/storage"
+	"datahive/pkg/protocol/pb"
+	storagelib "datahive/storage"
 
+	"github.com/spf13/cast"
 	"go.uber.org/zap"
 )
 
@@ -37,7 +39,7 @@ type Miner struct {
 	publisher Publisher
 
 	// 订阅管理
-	subscriptions map[string]MinerSubscription
+	subscriptions map[string]*MinerSubscription
 	mu            sync.RWMutex
 
 	// 状态控制
@@ -46,28 +48,29 @@ type Miner struct {
 	running bool
 
 	// 存储
-	timeSeriesStorage storage.TimeSeriesStorage
-	kvStorage         storage.KVStorage
+	storage *storagelib.StorageManager
+
+	// 类型转换器
+	typeConverter *storagelib.TypeConverter
 
 	// 统计
 	stats MinerStats
 }
 
 func NewMiner(client ccxt.Exchange, exchange, market string,
-	publisher Publisher, timeSeriesStorage storage.TimeSeriesStorage,
-	kvStorage storage.KVStorage) *Miner {
+	publisher Publisher, storage *storagelib.StorageManager) *Miner {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Miner{
-		exchange:          exchange,
-		market:            market,
-		client:            client,
-		publisher:         publisher,
-		timeSeriesStorage: timeSeriesStorage,
-		kvStorage:         kvStorage,
-		subscriptions:     make(map[string]MinerSubscription),
-		ctx:               ctx,
-		cancel:            cancel,
+		exchange:      exchange,
+		market:        market,
+		client:        client,
+		publisher:     publisher,
+		storage:       storage,
+		typeConverter: storagelib.NewTypeConverter(),
+		subscriptions: make(map[string]*MinerSubscription),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 }
 
@@ -112,8 +115,8 @@ func (m *Miner) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Subscribe 订阅数据 - 实现DataMiner接口
-func (m *Miner) Subscribe(req MinerSubscription) error {
+// Subscribe 订阅数据
+func (m *Miner) Subscribe(req *MinerSubscription) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -121,69 +124,44 @@ func (m *Miner) Subscribe(req MinerSubscription) error {
 		return fmt.Errorf("miner not running")
 	}
 
-	// 生成订阅ID
-	subID := m.generateSubscriptionID(req)
+	// 生成Channel
+	req.StreamName = m.client.GenerateChannel(req.Symbol, req.GetChannelParams())
+	// 检查是否已经订阅了该streamName
+	if _, exists := m.subscriptions[req.StreamName]; exists {
+		logger.Ctx(m.ctx).Debug("channel already subscribed",
+			zap.String("channel", req.StreamName))
+		return nil
+	}
 
 	// 保存订阅
-	m.subscriptions[subID] = req
+	m.subscriptions[req.StreamName] = req
 	m.stats.Subscriptions = len(m.subscriptions)
 
-	// 启动数据收集 (简化版本)
-	go m.collectData(req)
+	// 向交易所提交订阅请求
+	go m.subscribeAction(req)
 
 	logger.Ctx(m.ctx).Info("Subscription created",
-		zap.String("id", subID),
 		zap.String("symbol", req.Symbol),
-		zap.Any("events", req.Events))
+		zap.String("event", string(req.Event)))
 
 	return nil
 }
 
-// Unsubscribe 取消订阅 - 实现DataMiner接口
-func (m *Miner) Unsubscribe(id string) error {
+// Unsubscribe
+func (m *Miner) Unsubscribe(topic string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.subscriptions, id)
+	if _, exists := m.subscriptions[topic]; !exists {
+		logger.Ctx(m.ctx).Debug("Topic not found for unsubscription",
+			zap.String("topic", topic))
+		return nil // 不存在就算成功
+	}
+
+	delete(m.subscriptions, topic)
 	m.stats.Subscriptions = len(m.subscriptions)
 
-	logger.Ctx(m.ctx).Info("Subscription removed", zap.String("id", id))
-	return nil
-}
-
-// UnsubscribeBySymbolAndEvent 根据symbol和event类型取消订阅
-func (m *Miner) UnsubscribeBySymbolAndEvent(symbol string, eventType EventType) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 查找匹配的订阅
-	found := false
-	for id, sub := range m.subscriptions {
-		if sub.Symbol == symbol {
-			// 检查是否包含该事件类型
-			for i, event := range sub.Events {
-				if event == eventType {
-					// 从事件列表中移除该事件
-					sub.Events = append(sub.Events[:i], sub.Events[i+1:]...)
-					found = true
-
-					// 如果没有事件了，删除整个订阅
-					if len(sub.Events) == 0 {
-						delete(m.subscriptions, id)
-					}
-					break
-				}
-			}
-		}
-	}
-
-	if found {
-		m.stats.Subscriptions = len(m.subscriptions)
-		logger.Ctx(m.ctx).Info("Unsubscribed by symbol and event",
-			zap.String("symbol", symbol),
-			zap.String("event", string(eventType)))
-	}
-
+	logger.Ctx(m.ctx).Info("Subscription removed", zap.String("topic", topic))
 	return nil
 }
 
@@ -220,24 +198,32 @@ func (m *Miner) Health() Health {
 
 // FetchMarkets 获取市场信息
 func (m *Miner) FetchMarkets(ctx context.Context) ([]*ccxt.Market, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	logger.Ctx(ctx).Debug("Miner.FetchMarkets开始执行",
+		zap.String("exchange", m.exchange),
+		zap.String("market", m.market))
 
-	if !m.running {
+	m.mu.RLock()
+	running := m.running
+	client := m.client
+	m.mu.RUnlock()
+
+	logger.Ctx(ctx).Debug("检查Miner运行状态", zap.Bool("running", running))
+	if !running {
+		logger.Ctx(ctx).Error("Miner未运行状态",
+			zap.String("exchange", m.exchange),
+			zap.String("market", m.market))
 		return nil, fmt.Errorf("miner not running")
 	}
 
-	// 实际调用交易所API
-	markets, err := m.client.FetchMarkets(ctx, map[string]interface{}{})
+	logger.Ctx(ctx).Debug("开始调用交易所API")
+	markets, err := client.FetchMarkets(ctx, map[string]interface{}{})
 	if err != nil {
-		m.incrementErrors()
 		logger.Ctx(ctx).Error("Failed to fetch markets",
 			zap.String("exchange", m.exchange),
 			zap.Error(err))
 		return nil, err
 	}
 
-	m.incrementMessages()
 	logger.Ctx(ctx).Debug("Fetched markets successfully",
 		zap.String("exchange", m.exchange),
 		zap.Int("count", len(markets)))
@@ -247,17 +233,19 @@ func (m *Miner) FetchMarkets(ctx context.Context) ([]*ccxt.Market, error) {
 
 // FetchTicker 获取ticker数据
 func (m *Miner) FetchTicker(ctx context.Context, symbol string) (*ccxt.Ticker, error) {
+	// 只在必要时加锁，减少锁的持有时间
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	running := m.running
+	client := m.client
+	m.mu.RUnlock()
 
-	if !m.running {
+	if !running {
 		return nil, fmt.Errorf("miner not running")
 	}
 
-	// 实际调用交易所API
-	ticker, err := m.client.FetchTicker(ctx, symbol, map[string]interface{}{})
+	// 在锁外调用API，避免阻塞其他操作
+	ticker, err := client.FetchTicker(ctx, symbol, map[string]interface{}{})
 	if err != nil {
-		m.incrementErrors()
 		logger.Ctx(ctx).Error("Failed to fetch ticker",
 			zap.String("exchange", m.exchange),
 			zap.String("symbol", symbol),
@@ -265,7 +253,6 @@ func (m *Miner) FetchTicker(ctx context.Context, symbol string) (*ccxt.Ticker, e
 		return nil, err
 	}
 
-	m.incrementMessages()
 	logger.Ctx(ctx).Debug("Fetched ticker successfully",
 		zap.String("exchange", m.exchange),
 		zap.String("symbol", symbol))
@@ -275,17 +262,19 @@ func (m *Miner) FetchTicker(ctx context.Context, symbol string) (*ccxt.Ticker, e
 
 // FetchOHLCV 获取K线数据
 func (m *Miner) FetchOHLCV(ctx context.Context, symbol, timeframe string, since int64, limit int) ([]*ccxt.OHLCV, error) {
+	// 只在必要时加锁，减少锁的持有时间
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	running := m.running
+	client := m.client
+	m.mu.RUnlock()
 
-	if !m.running {
+	if !running {
 		return nil, fmt.Errorf("miner not running")
 	}
 
-	// 实际调用交易所API
-	ohlcv, err := m.client.FetchOHLCV(ctx, symbol, timeframe, since, limit, map[string]interface{}{})
+	// 在锁外调用API，避免阻塞其他操作
+	ohlcv, err := client.FetchOHLCV(ctx, symbol, timeframe, since, limit, map[string]interface{}{})
 	if err != nil {
-		m.incrementErrors()
 		logger.Ctx(ctx).Error("Failed to fetch OHLCV",
 			zap.String("exchange", m.exchange),
 			zap.String("symbol", symbol),
@@ -294,7 +283,6 @@ func (m *Miner) FetchOHLCV(ctx context.Context, symbol, timeframe string, since 
 		return nil, err
 	}
 
-	m.incrementMessages()
 	logger.Ctx(ctx).Debug("Fetched OHLCV successfully",
 		zap.String("exchange", m.exchange),
 		zap.String("symbol", symbol),
@@ -306,17 +294,19 @@ func (m *Miner) FetchOHLCV(ctx context.Context, symbol, timeframe string, since 
 
 // FetchOrderBook 获取订单簿数据
 func (m *Miner) FetchOrderBook(ctx context.Context, symbol string, limit int) (*ccxt.OrderBook, error) {
+	// 只在必要时加锁，减少锁的持有时间
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	running := m.running
+	client := m.client
+	m.mu.RUnlock()
 
-	if !m.running {
+	if !running {
 		return nil, fmt.Errorf("miner not running")
 	}
 
-	// 实际调用交易所API
-	orderBook, err := m.client.FetchOrderBook(ctx, symbol, limit, map[string]interface{}{})
+	// 在锁外调用API，避免阻塞其他操作
+	orderBook, err := client.FetchOrderBook(ctx, symbol, limit, map[string]interface{}{})
 	if err != nil {
-		m.incrementErrors()
 		logger.Ctx(ctx).Error("Failed to fetch order book",
 			zap.String("exchange", m.exchange),
 			zap.String("symbol", symbol),
@@ -324,7 +314,6 @@ func (m *Miner) FetchOrderBook(ctx context.Context, symbol string, limit int) (*
 		return nil, err
 	}
 
-	m.incrementMessages()
 	logger.Ctx(ctx).Debug("Fetched order book successfully",
 		zap.String("exchange", m.exchange),
 		zap.String("symbol", symbol),
@@ -334,250 +323,254 @@ func (m *Miner) FetchOrderBook(ctx context.Context, symbol string, limit int) (*
 	return orderBook, nil
 }
 
-// =============================================================================
-// 私有方法 - 数据处理和统计 - 使用真实WebSocket连接
-// =============================================================================
+// FetchTrades 获取交易记录
+func (m *Miner) FetchTrades(ctx context.Context, symbol string, since int64, limit int) ([]*ccxt.Trade, error) {
+	// 只在必要时加锁，减少锁的持有时间
+	m.mu.RLock()
+	running := m.running
+	client := m.client
+	m.mu.RUnlock()
 
-// collectData 数据收集 - 使用真实WebSocket连接
-func (m *Miner) collectData(sub MinerSubscription) {
-	logger.Ctx(m.ctx).Info("Starting WebSocket data collection",
+	if !running {
+		return nil, fmt.Errorf("miner not running")
+	}
+
+	// 在锁外调用API，避免阻塞其他操作
+	trades, err := client.FetchTrades(ctx, symbol, since, limit, map[string]interface{}{})
+	if err != nil {
+		logger.Ctx(ctx).Error("Failed to fetch trades",
+			zap.String("exchange", m.exchange),
+			zap.String("symbol", symbol),
+			zap.Error(err))
+		return nil, err
+	}
+
+	logger.Ctx(ctx).Debug("Fetched trades successfully",
+		zap.String("exchange", m.exchange),
+		zap.String("symbol", symbol),
+		zap.Int("count", len(trades)))
+
+	return trades, nil
+}
+
+// subscribeAction 开启订阅
+func (m *Miner) subscribeAction(sub *MinerSubscription) {
+	logger.Ctx(m.ctx).Debug("Starting WebSocket subscription with dedicated channel",
+		zap.String("exchange", m.exchange),
+		zap.String("event", string(sub.Event)),
+		zap.String("topic", sub.Topic))
+
+	// 根据事件类型调用相应的Watch方法，获取专用channel
+	var subscriptionID string
+	var err error
+	params := sub.ToMap()
+
+	// 创建用于取消该订阅的context
+	subCtx, cancel := context.WithCancel(m.ctx)
+	sub.CancelFunc = cancel
+
+	switch sub.Event {
+	case EventTicker:
+		var priceChan <-chan *ccxt.WatchPrice
+		subscriptionID, priceChan, err = m.client.WatchPrice(subCtx, sub.Symbol, params)
+		if err == nil {
+			sub.DataChannel = priceChan
+			go m.processPriceData(subCtx, sub, priceChan)
+		}
+	case EventKline:
+		timeframe := sub.Interval
+		if timeframe == "" {
+			timeframe = "1m"
+		}
+		var klineChan <-chan *ccxt.WatchOHLCV
+		subscriptionID, klineChan, err = m.client.WatchOHLCV(subCtx, sub.Symbol, timeframe, params)
+		if err == nil {
+			sub.DataChannel = klineChan
+			go m.processKlineData(subCtx, sub, klineChan)
+		}
+	case EventTrade:
+		var tradeChan <-chan *ccxt.WatchTrade
+		subscriptionID, tradeChan, err = m.client.WatchTrade(subCtx, sub.Symbol, params)
+		if err == nil {
+			sub.DataChannel = tradeChan
+			go m.processTradeData(subCtx, sub, tradeChan)
+		}
+	case EventOrderBook:
+		// 将深度信息添加到参数中
+		if sub.Depth > 0 {
+			if params == nil {
+				params = make(map[string]interface{})
+			}
+			params["limit"] = sub.Depth
+		}
+		var orderBookChan <-chan *ccxt.WatchOrderBook
+		subscriptionID, orderBookChan, err = m.client.WatchOrderBook(subCtx, sub.Symbol, params)
+		if err == nil {
+			sub.DataChannel = orderBookChan
+			go m.processOrderBookData(subCtx, sub, orderBookChan)
+		}
+	default:
+		err = fmt.Errorf("unsupported event type: %s", sub.Event)
+	}
+
+	if err != nil {
+		cancel() // 取消context
+		m.incrementErrors()
+		logger.Ctx(m.ctx).Error("Failed to start WebSocket subscription",
+			zap.String("exchange", m.exchange),
+			zap.String("symbol", sub.Symbol),
+			zap.String("event", string(sub.Event)),
+			zap.Error(err))
+		return
+	}
+
+	// 保存订阅ID
+	sub.SubscriptionID = subscriptionID
+
+	logger.Ctx(m.ctx).Info("Started WebSocket subscription with dedicated channel",
 		zap.String("exchange", m.exchange),
 		zap.String("symbol", sub.Symbol),
-		zap.Any("events", sub.Events))
-
-	// 为每种事件类型启动独立的WebSocket连接
-	for _, eventType := range sub.Events {
-		switch eventType {
-		case EventTicker:
-			go m.watchTicker(sub.Symbol)
-		case EventKline:
-			go m.watchOHLCV(sub.Symbol, sub.Options.Interval)
-		case EventTrade:
-			go m.watchTrades(sub.Symbol)
-		case EventOrderBook:
-			go m.watchOrderBook(sub.Symbol, sub.Options.Depth)
-		}
-	}
+		zap.String("event", string(sub.Event)),
+		zap.String("subscription_id", subscriptionID),
+		zap.String("StreamName", sub.StreamName))
 }
 
-// watchTicker 监听ticker WebSocket数据
-func (m *Miner) watchTicker(symbol string) {
-	ch, err := m.client.WatchTicker(m.ctx, symbol, map[string]interface{}{})
-	if err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to start ticker WebSocket",
-			zap.String("exchange", m.exchange),
-			zap.String("symbol", symbol),
-			zap.Error(err))
-		return
-	}
+// 新架构：专用channel数据处理方法
 
-	logger.Ctx(m.ctx).Info("Started ticker WebSocket",
-		zap.String("exchange", m.exchange),
-		zap.String("symbol", symbol))
+// processPriceData 处理价格专用channel数据 (WatchPrice)
+func (m *Miner) processPriceData(ctx context.Context, sub *MinerSubscription, priceChan <-chan *ccxt.WatchPrice) {
+	logger.Ctx(ctx).Info("Starting price data processor",
+		zap.String("symbol", sub.Symbol),
+		zap.String("subscription_id", sub.SubscriptionID))
 
 	for {
 		select {
-		case <-m.ctx.Done():
-			logger.Ctx(m.ctx).Info("Stopping ticker WebSocket",
-				zap.String("exchange", m.exchange),
-				zap.String("symbol", symbol))
+		case <-ctx.Done():
+			logger.Ctx(ctx).Info("Stopping price data processor",
+				zap.String("symbol", sub.Symbol))
 			return
-		case ticker, ok := <-ch:
+		case price, ok := <-priceChan:
 			if !ok {
-				logger.Ctx(m.ctx).Warn("Ticker WebSocket channel closed",
-					zap.String("exchange", m.exchange),
-					zap.String("symbol", symbol))
+				logger.Ctx(ctx).Warn("Price channel closed",
+					zap.String("symbol", sub.Symbol))
 				return
 			}
-			m.processTicker(ticker)
+			m.processPrice(price)
 		}
 	}
 }
 
-// watchOHLCV 监听K线 WebSocket数据
-func (m *Miner) watchOHLCV(symbol, interval string) {
-	if interval == "" {
-		interval = "1m" // 默认1分钟
-	}
-
-	ch, err := m.client.WatchOHLCV(m.ctx, symbol, interval, 0, 0, map[string]interface{}{})
-	if err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to start OHLCV WebSocket",
-			zap.String("exchange", m.exchange),
-			zap.String("symbol", symbol),
-			zap.String("interval", interval),
-			zap.Error(err))
-		return
-	}
-
-	logger.Ctx(m.ctx).Info("Started OHLCV WebSocket",
-		zap.String("exchange", m.exchange),
-		zap.String("symbol", symbol),
-		zap.String("interval", interval))
+// processKlineData 处理kline专用channel数据
+func (m *Miner) processKlineData(ctx context.Context, sub *MinerSubscription, klineChan <-chan *ccxt.WatchOHLCV) {
+	logger.Ctx(ctx).Info("Starting kline data processor",
+		zap.String("symbol", sub.Symbol),
+		zap.String("interval", sub.Interval),
+		zap.String("subscription_id", sub.SubscriptionID))
 
 	for {
 		select {
-		case <-m.ctx.Done():
-			logger.Ctx(m.ctx).Info("Stopping OHLCV WebSocket",
-				zap.String("exchange", m.exchange),
-				zap.String("symbol", symbol))
+		case <-ctx.Done():
+			logger.Ctx(ctx).Info("Stopping kline data processor",
+				zap.String("symbol", sub.Symbol))
 			return
-		case ohlcv, ok := <-ch:
+		case kline, ok := <-klineChan:
 			if !ok {
-				logger.Ctx(m.ctx).Warn("OHLCV WebSocket channel closed",
-					zap.String("exchange", m.exchange),
-					zap.String("symbol", symbol))
+				logger.Ctx(ctx).Warn("Kline channel closed",
+					zap.String("symbol", sub.Symbol))
 				return
 			}
-			m.processOHLCV(ohlcv, interval)
+			m.processOHLCV(kline) // 复用原有的处理逻辑
 		}
 	}
 }
 
-// watchTrades 监听交易 WebSocket数据
-func (m *Miner) watchTrades(symbol string) {
-	ch, err := m.client.WatchTrades(m.ctx, symbol, 0, 0, map[string]interface{}{})
-	if err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to start trades WebSocket",
-			zap.String("exchange", m.exchange),
-			zap.String("symbol", symbol),
-			zap.Error(err))
-		return
-	}
-
-	logger.Ctx(m.ctx).Info("Started trades WebSocket",
-		zap.String("exchange", m.exchange),
-		zap.String("symbol", symbol))
+// processTradeData 处理trade专用channel数据
+func (m *Miner) processTradeData(ctx context.Context, sub *MinerSubscription, tradeChan <-chan *ccxt.WatchTrade) {
+	logger.Ctx(ctx).Info("Starting trade data processor",
+		zap.String("symbol", sub.Symbol),
+		zap.String("subscription_id", sub.SubscriptionID))
 
 	for {
 		select {
-		case <-m.ctx.Done():
-			logger.Ctx(m.ctx).Info("Stopping trades WebSocket",
-				zap.String("exchange", m.exchange),
-				zap.String("symbol", symbol))
+		case <-ctx.Done():
+			logger.Ctx(ctx).Info("Stopping trade data processor",
+				zap.String("symbol", sub.Symbol))
 			return
-		case trade, ok := <-ch:
+		case trade, ok := <-tradeChan:
 			if !ok {
-				logger.Ctx(m.ctx).Warn("Trades WebSocket channel closed",
-					zap.String("exchange", m.exchange),
-					zap.String("symbol", symbol))
+				logger.Ctx(ctx).Warn("Trade channel closed",
+					zap.String("symbol", sub.Symbol))
 				return
 			}
-			m.processTrade(trade)
+			m.processTrade(trade) // 复用原有的处理逻辑
 		}
 	}
 }
 
-// watchOrderBook 监听订单簿 WebSocket数据
-func (m *Miner) watchOrderBook(symbol string, depth int) {
-	if depth <= 0 {
-		depth = 20 // 默认20档
-	}
-
-	ch, err := m.client.WatchOrderBook(m.ctx, symbol, depth, map[string]interface{}{})
-	if err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to start orderbook WebSocket",
-			zap.String("exchange", m.exchange),
-			zap.String("symbol", symbol),
-			zap.Int("depth", depth),
-			zap.Error(err))
-		return
-	}
-
-	logger.Ctx(m.ctx).Info("Started orderbook WebSocket",
-		zap.String("exchange", m.exchange),
-		zap.String("symbol", symbol),
-		zap.Int("depth", depth))
+// processOrderBookData 处理orderbook专用channel数据
+func (m *Miner) processOrderBookData(ctx context.Context, sub *MinerSubscription, orderBookChan <-chan *ccxt.WatchOrderBook) {
+	logger.Ctx(ctx).Info("Starting orderbook data processor",
+		zap.String("symbol", sub.Symbol),
+		zap.String("subscription_id", sub.SubscriptionID))
 
 	for {
 		select {
-		case <-m.ctx.Done():
-			logger.Ctx(m.ctx).Info("Stopping orderbook WebSocket",
-				zap.String("exchange", m.exchange),
-				zap.String("symbol", symbol))
+		case <-ctx.Done():
+			logger.Ctx(ctx).Info("Stopping orderbook data processor",
+				zap.String("symbol", sub.Symbol))
 			return
-		case orderBook, ok := <-ch:
+		case orderBook, ok := <-orderBookChan:
 			if !ok {
-				logger.Ctx(m.ctx).Warn("OrderBook WebSocket channel closed",
-					zap.String("exchange", m.exchange),
-					zap.String("symbol", symbol))
+				logger.Ctx(ctx).Warn("OrderBook channel closed",
+					zap.String("symbol", sub.Symbol))
 				return
 			}
-			m.processOrderBook(orderBook)
+			m.processOrderBook(orderBook) // 复用原有的处理逻辑
 		}
 	}
 }
 
-// processSubscription 处理订阅 - 简化版本 (已被上面的WebSocket方法替代)
-func (m *Miner) processSubscription(sub MinerSubscription) {
-	// 这个方法现在已经不需要了，因为我们使用真实的WebSocket连接
-	// 保留以便向后兼容或作为fallback
-	logger.Ctx(m.ctx).Debug("processSubscription called (legacy method)")
-}
-
-// processTicker 处理ticker数据 - 使用真实WebSocket数据
-func (m *Miner) processTicker(watchTicker *ccxt.WatchTicker) {
+// processPrice 处理价格数据 (WatchPrice)
+func (m *Miner) processPrice(watchPrice *ccxt.WatchPrice) {
 	// 转换为标准格式的数据结构
-	tickerData := map[string]interface{}{
-		"symbol":     watchTicker.Symbol,
-		"timestamp":  watchTicker.TimeStamp,
-		"high":       watchTicker.High,
-		"low":        watchTicker.Low,
-		"bid":        watchTicker.Bid,
-		"ask":        watchTicker.Ask,
-		"open":       watchTicker.Open,
-		"close":      watchTicker.Close,
-		"last":       watchTicker.Last,
-		"volume":     watchTicker.BaseVolume,
-		"change":     watchTicker.Change,
-		"percentage": watchTicker.Percentage,
-		"channel":    watchTicker.Channel,
+	priceData := map[string]interface{}{
+		"symbol":    watchPrice.Symbol,
+		"timestamp": watchPrice.TimeStamp,
+		"price":     watchPrice.Price,
+		"last":      watchPrice.Price, // 使用价格作为最新价格
+		"close":     watchPrice.Price, // 使用价格作为收盘价
+		"channel":   watchPrice.StreamName,
 	}
 
-	event := Event{
-		Type:      EventTicker,
-		Source:    m.exchange,
-		Market:    m.market,
-		Symbol:    watchTicker.Symbol,
-		Data:      tickerData, // 使用转换后的数据
-		Timestamp: time.Now().UnixMilli(),
-	}
+	// 创建并发布事件
+	event := m.createEvent(EventTicker, priceData, watchPrice.StreamName)
+	m.publishEvent(event)
 
-	// 发布事件
-	if err := m.publisher.Publish(m.ctx, event); err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to publish ticker", zap.Error(err))
-		return
-	}
+	// 保存到存储 - 转换为protocol格式
+	if tsStorage := m.storage.GetTimeSeriesStorage(); tsStorage != nil {
+		protocolTicker := m.typeConverter.CCXTTickerToProtocol(m.exchange, &ccxt.Ticker{
+			Symbol:    watchPrice.Symbol,
+			TimeStamp: watchPrice.TimeStamp,
+			Last:      watchPrice.Price, // 使用价格作为最新价格
+			Close:     watchPrice.Price, // 使用价格作为收盘价
+			// 其他字段使用默认值0
+		})
 
-	// 保存到存储
-	dataPoint := DataPoint{
-		Type:      event.Type,
-		Exchange:  event.Source,
-		Market:    event.Market,
-		Symbol:    event.Symbol,
-		Data:      event.Data,
-		Timestamp: event.Timestamp,
-	}
-
-	if err := m.storage.Save(m.ctx, dataPoint); err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to save ticker", zap.Error(err))
-		return
+		if err := tsStorage.SaveTickers(m.ctx, m.exchange, []*pb.Ticker{protocolTicker}); err != nil {
+			m.incrementErrors()
+			logger.Ctx(m.ctx).Error("Failed to save ticker", zap.Error(err))
+			return
+		}
 	}
 
 	m.incrementMessages()
-	logger.Ctx(m.ctx).Debug("Processed ticker data",
-		zap.String("symbol", watchTicker.Symbol),
-		zap.Float64("price", watchTicker.Last))
+	logger.Ctx(m.ctx).Debug("Processed price data",
+		zap.String("symbol", watchPrice.Symbol),
+		zap.Float64("price", watchPrice.Price))
 }
 
-// processOHLCV 处理K线数据 - 使用真实WebSocket数据
-func (m *Miner) processOHLCV(watchOHLCV *ccxt.WatchOHLCV, interval string) {
+// processOHLCV 处理K线数据
+func (m *Miner) processOHLCV(watchOHLCV *ccxt.WatchOHLCV) {
 	// 转换为标准格式的数据结构
 	ohlcvData := map[string]interface{}{
 		"symbol":    watchOHLCV.Symbol,
@@ -588,50 +581,40 @@ func (m *Miner) processOHLCV(watchOHLCV *ccxt.WatchOHLCV, interval string) {
 		"low":       watchOHLCV.Low,
 		"close":     watchOHLCV.Close,
 		"volume":    watchOHLCV.Volume,
-		"channel":   watchOHLCV.Channel,
+		"channel":   watchOHLCV.StreamName,
 	}
 
-	event := Event{
-		Type:      EventKline,
-		Source:    m.exchange,
-		Market:    m.market,
-		Symbol:    watchOHLCV.Symbol,
-		Data:      ohlcvData, // 使用转换后的数据
-		Timestamp: time.Now().UnixMilli(),
-	}
+	// 创建并发布事件
+	event := m.createEvent(EventKline, ohlcvData, watchOHLCV.StreamName)
+	m.publishEvent(event)
 
-	// 发布事件
-	if err := m.publisher.Publish(m.ctx, event); err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to publish OHLCV", zap.Error(err))
-		return
-	}
+	// 保存到存储 - 转换为protocol格式
+	if tsStorage := m.storage.GetTimeSeriesStorage(); tsStorage != nil {
+		// 将ccxt OHLCV转换为protocol Kline
+		protocolKline := m.typeConverter.CCXTOHLCVToProtocolKline(m.exchange, watchOHLCV.Symbol, watchOHLCV.Timeframe, &ccxt.OHLCV{
+			Timestamp: watchOHLCV.Timestamp,
+			Open:      watchOHLCV.Open,
+			High:      watchOHLCV.High,
+			Low:       watchOHLCV.Low,
+			Close:     watchOHLCV.Close,
+			Volume:    watchOHLCV.Volume,
+		})
 
-	// 保存到存储
-	dataPoint := DataPoint{
-		Type:      event.Type,
-		Exchange:  event.Source,
-		Market:    event.Market,
-		Symbol:    event.Symbol,
-		Data:      event.Data,
-		Timestamp: event.Timestamp,
-	}
-
-	if err := m.storage.Save(m.ctx, dataPoint); err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to save OHLCV", zap.Error(err))
-		return
+		if err := tsStorage.SaveKlines(m.ctx, m.exchange, []*pb.Kline{protocolKline}); err != nil {
+			m.incrementErrors()
+			logger.Ctx(m.ctx).Error("Failed to save OHLCV", zap.Error(err))
+			return
+		}
 	}
 
 	m.incrementMessages()
 	logger.Ctx(m.ctx).Debug("Processed OHLCV data",
 		zap.String("symbol", watchOHLCV.Symbol),
-		zap.String("interval", interval))
+		zap.String("interval", watchOHLCV.Timeframe))
 }
 
-// processTrade 处理交易数据 - 使用真实WebSocket数据
+// processTrade 处理交易数据
 func (m *Miner) processTrade(watchTrade *ccxt.WatchTrade) {
-	// 转换为标准格式的数据结构
 	tradeData := map[string]interface{}{
 		"symbol":       watchTrade.Symbol,
 		"id":           watchTrade.ID,
@@ -642,39 +625,30 @@ func (m *Miner) processTrade(watchTrade *ccxt.WatchTrade) {
 		"side":         watchTrade.Side,
 		"type":         watchTrade.Type,
 		"takerOrMaker": watchTrade.TakerOrMaker,
-		"channel":      watchTrade.Channel,
+		"channel":      watchTrade.StreamName,
 	}
 
-	event := Event{
-		Type:      EventTrade,
-		Source:    m.exchange,
-		Market:    m.market,
-		Symbol:    watchTrade.Symbol,
-		Data:      tradeData, // 使用转换后的数据
-		Timestamp: time.Now().UnixMilli(),
-	}
+	event := m.createEvent(EventTrade, tradeData, watchTrade.StreamName)
+	m.publishEvent(event)
 
-	// 发布事件
-	if err := m.publisher.Publish(m.ctx, event); err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to publish trade", zap.Error(err))
-		return
-	}
+	if tsStorage := m.storage.GetTimeSeriesStorage(); tsStorage != nil {
+		protocolTrade := m.typeConverter.CCXTTradeToProtocol(m.exchange, &ccxt.Trade{
+			ID:           watchTrade.ID,
+			Symbol:       watchTrade.Symbol,
+			Amount:       watchTrade.Amount,
+			Price:        watchTrade.Price,
+			Side:         watchTrade.Side,
+			Type:         watchTrade.Type,
+			Timestamp:    watchTrade.Timestamp,
+			TakerOrMaker: watchTrade.TakerOrMaker,
+			Cost:         watchTrade.Cost,
+		})
 
-	// 保存到存储
-	dataPoint := DataPoint{
-		Type:      event.Type,
-		Exchange:  event.Source,
-		Market:    event.Market,
-		Symbol:    event.Symbol,
-		Data:      event.Data,
-		Timestamp: event.Timestamp,
-	}
-
-	if err := m.storage.Save(m.ctx, dataPoint); err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to save trade", zap.Error(err))
-		return
+		if err := tsStorage.SaveTrades(m.ctx, m.exchange, []*pb.Trade{protocolTrade}); err != nil {
+			m.incrementErrors()
+			logger.Ctx(m.ctx).Error("Failed to save trade", zap.Error(err))
+			return
+		}
 	}
 
 	m.incrementMessages()
@@ -684,7 +658,7 @@ func (m *Miner) processTrade(watchTrade *ccxt.WatchTrade) {
 		zap.Float64("amount", watchTrade.Amount))
 }
 
-// processOrderBook 处理订单簿数据 - 使用真实WebSocket数据
+// processOrderBook 处理订单簿数据
 func (m *Miner) processOrderBook(watchOrderBook *ccxt.WatchOrderBook) {
 	// 转换为标准格式的数据结构
 	orderBookData := map[string]interface{}{
@@ -693,53 +667,23 @@ func (m *Miner) processOrderBook(watchOrderBook *ccxt.WatchOrderBook) {
 		"bids":      watchOrderBook.Bids,
 		"asks":      watchOrderBook.Asks,
 		"nonce":     watchOrderBook.Nonce,
-		"channel":   watchOrderBook.Channel,
+		"channel":   watchOrderBook.StreamName,
 	}
 
-	event := Event{
-		Type:      EventOrderBook,
-		Source:    m.exchange,
-		Market:    m.market,
-		Symbol:    watchOrderBook.Symbol,
-		Data:      orderBookData, // 使用转换后的数据
-		Timestamp: time.Now().UnixMilli(),
-	}
+	// 创建并发布事件
+	event := m.createEvent(EventOrderBook, orderBookData, watchOrderBook.StreamName)
+	m.publishEvent(event)
 
-	// 发布事件
-	if err := m.publisher.Publish(m.ctx, event); err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to publish orderbook", zap.Error(err))
-		return
-	}
-
-	// 保存到存储
-	dataPoint := DataPoint{
-		Type:      event.Type,
-		Exchange:  event.Source,
-		Market:    event.Market,
-		Symbol:    event.Symbol,
-		Data:      event.Data,
-		Timestamp: event.Timestamp,
-	}
-
-	if err := m.storage.Save(m.ctx, dataPoint); err != nil {
-		m.incrementErrors()
-		logger.Ctx(m.ctx).Error("Failed to save orderbook", zap.Error(err))
-		return
+	// 可以选择保存到Redis缓存
+	if kvStorage := m.storage.GetKVStorage(); kvStorage != nil {
+		// 可以实现订单簿的Redis缓存逻辑
+		logger.Ctx(m.ctx).Debug("OrderBook data processed (not saved to time series storage)",
+			zap.String("symbol", watchOrderBook.Symbol))
 	}
 
 	m.incrementMessages()
 	logger.Ctx(m.ctx).Debug("Processed orderbook data",
 		zap.String("symbol", watchOrderBook.Symbol))
-}
-
-// generateSubscriptionID 生成订阅ID
-func (m *Miner) generateSubscriptionID(req MinerSubscription) string {
-	return fmt.Sprintf("%s_%s_%s_%d",
-		m.exchange,
-		m.market,
-		req.Symbol,
-		time.Now().UnixNano())
 }
 
 // incrementMessages 增加消息计数
@@ -756,4 +700,43 @@ func (m *Miner) incrementErrors() {
 	defer m.mu.Unlock()
 	m.stats.Errors++
 	m.stats.LastUpdate = time.Now()
+}
+
+// publishEvent 统一的事件发布逻辑
+func (m *Miner) publishEvent(event Event) {
+	if m.publisher != nil {
+		if err := m.publisher.Publish(m.ctx, event); err != nil {
+			m.incrementErrors()
+			logger.Ctx(m.ctx).Error("Failed to publish event",
+				zap.String("type", string(event.Type)),
+				zap.String("symbol", event.Symbol),
+				zap.Error(err))
+		}
+	} else {
+		logger.Ctx(m.ctx).Warn("Publisher not initialized",
+			zap.String("type", string(event.Type)))
+	}
+}
+
+// createEvent 创建标准化事件结构
+func (m *Miner) createEvent(eventType EventType, data map[string]interface{}, streamName string) Event {
+	event := Event{
+		Type:      eventType,
+		Source:    m.exchange,
+		Market:    m.market,
+		Symbol:    cast.ToString(data["symbol"]),
+		Data:      data,
+		Timestamp: time.Now().UnixMilli(),
+	}
+
+	// 统一的映射逻辑
+	if sub, ok := m.subscriptions[streamName]; ok {
+		event.Topic = sub.Topic
+		event.Symbol = sub.Symbol
+
+		data["symbol"] = sub.Symbol
+		event.Data = data
+	}
+
+	return event
 }

@@ -102,7 +102,7 @@ func NewTextEncoderByConfig(cfg *Config) zapcore.Encoder {
 		cc.TimeKey = ""
 	}
 	switch cfg.Format {
-	case "text", "":
+	case "text":
 		return &textEncoder{
 			EncoderConfig:       &cc,
 			buf:                 _pool.Get(),
@@ -111,6 +111,13 @@ func NewTextEncoderByConfig(cfg *Config) zapcore.Encoder {
 		}
 	case "json":
 		return zapcore.NewJSONEncoder(cc)
+	case "console", "":
+		// Console格式使用zap的ConsoleEncoder，提供人类可读的带颜色输出（默认格式）
+		consoleConfig := cc
+		consoleConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		consoleConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+		consoleConfig.EncodeCaller = zapcore.ShortCallerEncoder
+		return zapcore.NewConsoleEncoder(consoleConfig)
 	default:
 		panic(fmt.Sprintf("unsupport log format: %s", cfg.Format))
 	}

@@ -2,22 +2,23 @@ package storage
 
 import (
 	"context"
-	"datahive/pkg/logger"
-	"datahive/pkg/protocol"
 	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"datahive/pkg/logger"
+	"datahive/pkg/protocol/pb"
+
 	"go.uber.org/zap"
 )
 
 // 估算数据结构的内存大小
 const (
-	klineSize  = int64(unsafe.Sizeof(protocol.Kline{}))
-	tradeSize  = int64(unsafe.Sizeof(protocol.Trade{}))
-	tickerSize = int64(unsafe.Sizeof(protocol.Ticker{}))
+	klineSize  = int64(unsafe.Sizeof(pb.Kline{}))
+	tradeSize  = int64(unsafe.Sizeof(pb.Trade{}))
+	tickerSize = int64(unsafe.Sizeof(pb.Ticker{}))
 )
 
 // start 启动批量处理器
@@ -64,7 +65,7 @@ func (bp *BatchProcessor) stop() {
 }
 
 // addKlines 添加K线数据到批次
-func (bp *BatchProcessor) addKlines(klines []*protocol.Kline) error {
+func (bp *BatchProcessor) addKlines(klines []*pb.Kline) error {
 	bp.klineMu.Lock()
 	defer bp.klineMu.Unlock()
 
@@ -88,7 +89,7 @@ func (bp *BatchProcessor) addKlines(klines []*protocol.Kline) error {
 }
 
 // addTrades 添加交易数据到批次
-func (bp *BatchProcessor) addTrades(trades []*protocol.Trade) error {
+func (bp *BatchProcessor) addTrades(trades []*pb.Trade) error {
 	bp.tradeMu.Lock()
 	defer bp.tradeMu.Unlock()
 
@@ -109,12 +110,12 @@ func (bp *BatchProcessor) addTrades(trades []*protocol.Trade) error {
 }
 
 // addTickers 添加价格数据到批次
-func (bp *BatchProcessor) addTickers(tickers []*protocol.Ticker) error {
+func (bp *BatchProcessor) addTickers(tickers []*pb.Ticker) error {
 	return bp.addTickersWithExchange("", tickers)
 }
 
 // addTickersWithExchange 添加价格数据到批次（指定交易所）
-func (bp *BatchProcessor) addTickersWithExchange(exchange string, tickers []*protocol.Ticker) error {
+func (bp *BatchProcessor) addTickersWithExchange(exchange string, tickers []*pb.Ticker) error {
 	bp.tickerMu.Lock()
 	defer bp.tickerMu.Unlock()
 
@@ -166,7 +167,7 @@ func (bp *BatchProcessor) flushKlines() {
 	}
 
 	batch := bp.klineBatch
-	bp.klineBatch = make([]*protocol.Kline, 0, bp.maxBatchSize)
+	bp.klineBatch = make([]*pb.Kline, 0, bp.maxBatchSize)
 	bp.klineMu.Unlock()
 
 	// 更新内存使用量
@@ -199,7 +200,7 @@ func (bp *BatchProcessor) flushTrades() {
 	}
 
 	batch := bp.tradeBatch
-	bp.tradeBatch = make([]*protocol.Trade, 0, bp.maxBatchSize)
+	bp.tradeBatch = make([]*pb.Trade, 0, bp.maxBatchSize)
 	bp.tradeMu.Unlock()
 
 	memoryDecrease := int64(len(batch)) * tradeSize
@@ -236,7 +237,7 @@ func (bp *BatchProcessor) flushTickersWithExchange(exchange string) {
 	}
 
 	batch := bp.tickerBatch
-	bp.tickerBatch = make([]*protocol.Ticker, 0, bp.maxBatchSize)
+	bp.tickerBatch = make([]*pb.Ticker, 0, bp.maxBatchSize)
 	bp.tickerMu.Unlock()
 
 	memoryDecrease := int64(len(batch)) * tickerSize
@@ -262,13 +263,13 @@ func (bp *BatchProcessor) flushTickersWithExchange(exchange string) {
 // 批量保存实现
 
 // saveKlinesBatch 批量保存K线数据 - 按时间周期分表
-func (bp *BatchProcessor) saveKlinesBatch(ctx context.Context, klines []*protocol.Kline) error {
+func (bp *BatchProcessor) saveKlinesBatch(ctx context.Context, klines []*pb.Kline) error {
 	if len(klines) == 0 {
 		return nil
 	}
 
 	// 按时间周期和交易所分组
-	groups := make(map[string][]*protocol.Kline)
+	groups := make(map[string][]*pb.Kline)
 	for _, kline := range klines {
 		key := fmt.Sprintf("%s_%s", kline.Exchange, kline.Timeframe)
 		groups[key] = append(groups[key], kline)
@@ -291,7 +292,7 @@ func (bp *BatchProcessor) saveKlinesBatch(ctx context.Context, klines []*protoco
 }
 
 // insertKlinesByTimeframe 插入指定时间周期的K线数据
-func (bp *BatchProcessor) insertKlinesByTimeframe(ctx context.Context, timeframe string, klines []*protocol.Kline) error {
+func (bp *BatchProcessor) insertKlinesByTimeframe(ctx context.Context, timeframe string, klines []*pb.Kline) error {
 	if len(klines) == 0 {
 		return nil
 	}
@@ -324,7 +325,7 @@ func (bp *BatchProcessor) insertKlinesByTimeframe(ctx context.Context, timeframe
 }
 
 // saveTradesBatch 批量保存交易数据
-func (bp *BatchProcessor) saveTradesBatch(ctx context.Context, trades []*protocol.Trade) error {
+func (bp *BatchProcessor) saveTradesBatch(ctx context.Context, trades []*pb.Trade) error {
 	if len(trades) == 0 {
 		return nil
 	}
@@ -347,7 +348,7 @@ func (bp *BatchProcessor) saveTradesBatch(ctx context.Context, trades []*protoco
 }
 
 // insertTradesBatch 插入交易数据批次
-func (bp *BatchProcessor) insertTradesBatch(ctx context.Context, trades []*protocol.Trade) error {
+func (bp *BatchProcessor) insertTradesBatch(ctx context.Context, trades []*pb.Trade) error {
 	if len(trades) == 0 {
 		return nil
 	}
@@ -377,12 +378,12 @@ func (bp *BatchProcessor) insertTradesBatch(ctx context.Context, trades []*proto
 }
 
 // saveTickersBatch 批量保存价格数据
-func (bp *BatchProcessor) saveTickersBatch(ctx context.Context, tickers []*protocol.Ticker) error {
+func (bp *BatchProcessor) saveTickersBatch(ctx context.Context, tickers []*pb.Ticker) error {
 	return bp.saveTickersBatchWithExchange(ctx, "", tickers)
 }
 
 // saveTickersBatchWithExchange 批量保存价格数据（指定交易所）
-func (bp *BatchProcessor) saveTickersBatchWithExchange(ctx context.Context, exchange string, tickers []*protocol.Ticker) error {
+func (bp *BatchProcessor) saveTickersBatchWithExchange(ctx context.Context, exchange string, tickers []*pb.Ticker) error {
 	if len(tickers) == 0 {
 		return nil
 	}

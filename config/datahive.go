@@ -54,8 +54,12 @@ type Config struct {
 	// 服务器配置
 	Server *ServerConfig `yaml:"server" json:"server"`
 
+	// 交易所配置
+	Exchanges map[string]*ExchangeConfig `yaml:"exchanges" json:"exchanges"`
+
 	// 缓存配置
-	Cache *CacheConfig `yaml:"cache" json:"cache"`
+	QuestDB *QuestDBConfig `yaml:"questdb" json:"questdb"` // QuestDB配置
+	Redis   *RedisConfig   `yaml:"redis" json:"redis"`     // Redis配置
 }
 
 // ServerConfig 服务器配置
@@ -64,17 +68,19 @@ type ServerConfig struct {
 	Port int    `yaml:"port" json:"port"` // 监听端口
 }
 
-// CacheConfig 缓存配置
-type CacheConfig struct {
-	QuestDB *QuestDBConfig `yaml:"questdb" json:"questdb"` // QuestDB配置
-	Redis   *RedisConfig   `yaml:"redis" json:"redis"`     // Redis配置
+// ExchangeConfig 交易所配置
+type ExchangeConfig struct {
+	Enabled         bool   `yaml:"enabled" json:"enabled"`                 // 是否启用
+	APIKey          string `yaml:"apiKey" json:"apiKey"`                   // API密钥
+	Secret          string `yaml:"secret" json:"secret"`                   // API密钥秘密
+	TestNet         bool   `yaml:"testnet" json:"testnet"`                 // 是否使用测试网
+	RateLimit       int    `yaml:"rateLimit" json:"rateLimit"`             // 限流速率
+	EnableWebSocket bool   `yaml:"enableWebSocket" json:"enableWebSocket"` // 是否启用WebSocket
+	WSMaxReconnect  int    `yaml:"wsMaxReconnect" json:"wsMaxReconnect"`   // WebSocket最大重连次数
+	DefaultType     string `yaml:"defaultType" json:"defaultType"`         // 默认市场类型
+	Timeout         int    `yaml:"timeout" json:"timeout"`                 // 超时时间(毫秒)
 }
 
-// =============================================================================
-// 默认配置和构造函数
-// =============================================================================
-
-// DefaultConfig 返回默认配置
 func DefaultConfig() *Config {
 	return &Config{
 		Name:     DefaultAppName,
@@ -85,10 +91,20 @@ func DefaultConfig() *Config {
 			Port: DefaultServerPort,
 		},
 
-		Cache: &CacheConfig{
-			QuestDB: NewQuestDBConfig(),
-			Redis:   NewRedisConfig(),
+		// 交易所配置
+		Exchanges: map[string]*ExchangeConfig{
+			"binance": {
+				Enabled:         true,
+				EnableWebSocket: false,
+				WSMaxReconnect:  5,
+				Timeout:         30000,
+				RateLimit:       1200,
+			},
 		},
+
+		// 缓存配置
+		QuestDB: NewQuestDBConfig(),
+		Redis:   NewRedisConfig(),
 	}
 }
 
@@ -119,15 +135,6 @@ func (c *Config) Validate() error {
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		c.Server.Port = DefaultServerPort
 	}
-
-	// 验证缓存配置
-	if c.Cache == nil {
-		c.Cache = &CacheConfig{
-			QuestDB: NewQuestDBConfig(),
-			Redis:   NewRedisConfig(),
-		}
-	}
-
 	return nil
 }
 
