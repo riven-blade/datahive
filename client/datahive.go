@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riven-blade/datahive/pkg/ccxt"
 	"github.com/riven-blade/datahive/pkg/logger"
 	"github.com/riven-blade/datahive/pkg/protocol/pb"
 
@@ -22,18 +21,18 @@ type DataHiveClient interface {
 	IsConnected() bool
 
 	// 获取数据 (RESTful)
-	FetchMarkets(ctx context.Context, exchange, marketType, stackType string, reload ...bool) (map[string]*ccxt.Market, error)
-	FetchTicker(ctx context.Context, exchange, marketType, symbol string) (*ccxt.Ticker, error)
-	FetchTickers(ctx context.Context, exchange, marketType string, symbols ...string) (map[string]*ccxt.Ticker, error)
-	FetchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string, since int64, limit int32) ([]*ccxt.OHLCV, error)
-	FetchTrades(ctx context.Context, exchange, marketType, symbol string, since int64, limit int32) ([]*ccxt.Trade, error)
-	FetchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (*ccxt.OrderBook, error)
+	FetchMarkets(ctx context.Context, exchange, marketType, stackType string, reload ...bool) ([]*pb.Market, error)
+	FetchTicker(ctx context.Context, exchange, marketType, symbol string) (*pb.Ticker, error)
+	FetchTickers(ctx context.Context, exchange, marketType string, symbols ...string) ([]*pb.Ticker, error)
+	FetchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string, since int64, limit int32) ([]*pb.Kline, error)
+	FetchTrades(ctx context.Context, exchange, marketType, symbol string, since int64, limit int32) ([]*pb.Trade, error)
+	FetchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (*pb.OrderBook, error)
 
 	// 实时订阅 (WebSocket)
-	WatchPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *ccxt.WatchPrice, string, error)
-	WatchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string) (<-chan *ccxt.OHLCV, string, error)
-	WatchTrades(ctx context.Context, exchange, marketType, symbol string) (<-chan *ccxt.Trade, string, error)
-	WatchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (<-chan *ccxt.OrderBook, string, error)
+	WatchTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.TickerUpdate, string, error)
+	WatchKline(ctx context.Context, exchange, marketType, symbol, timeframe string) (<-chan *pb.KlineUpdate, string, error)
+	WatchTrades(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.TradeUpdate, string, error)
+	WatchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (<-chan *pb.OrderBookUpdate, string, error)
 	Unwatch(subscriptionID string) error
 
 	// 状态和错误处理
@@ -44,15 +43,15 @@ type DataHiveClient interface {
 // subscription 订阅信息
 type subscription struct {
 	ID       string
-	Type     string // price, ohlcv, trades, orderbook
+	Type     string // ticker, kline, trades, orderbook
 	Exchange string
 	Symbol   string
 
 	// Channels
-	PriceCh     chan *ccxt.WatchPrice
-	OHLCVCh     chan *ccxt.OHLCV
-	TradesCh    chan *ccxt.Trade
-	OrderBookCh chan *ccxt.OrderBook
+	TickerCh    chan *pb.TickerUpdate
+	KlineCh     chan *pb.KlineUpdate
+	TradesCh    chan *pb.TradeUpdate
+	OrderBookCh chan *pb.OrderBookUpdate
 
 	// 生命周期
 	cancel context.CancelFunc
@@ -127,7 +126,7 @@ func (c *dataHiveClient) GetStats() *ClientStats {
 // =============================================================================
 
 // FetchMarkets 获取市场信息
-func (c *dataHiveClient) FetchMarkets(ctx context.Context, exchange, marketType, stackType string, reload ...bool) (map[string]*ccxt.Market, error) {
+func (c *dataHiveClient) FetchMarkets(ctx context.Context, exchange, marketType, stackType string, reload ...bool) ([]*pb.Market, error) {
 	req := &pb.FetchMarketsRequest{
 		Exchange:   exchange,
 		MarketType: marketType,
@@ -149,16 +148,11 @@ func (c *dataHiveClient) FetchMarkets(ctx context.Context, exchange, marketType,
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	markets := make(map[string]*ccxt.Market)
-	for _, market := range marketsResp.Markets {
-		markets[market.Symbol] = c.convertMarket(market)
-	}
-
-	return markets, nil
+	return marketsResp.Markets, nil
 }
 
 // FetchTicker 获取单个ticker
-func (c *dataHiveClient) FetchTicker(ctx context.Context, exchange, marketType, symbol string) (*ccxt.Ticker, error) {
+func (c *dataHiveClient) FetchTicker(ctx context.Context, exchange, marketType, symbol string) (*pb.Ticker, error) {
 	req := &pb.FetchTickerRequest{
 		Exchange:   exchange,
 		MarketType: marketType,
@@ -180,16 +174,16 @@ func (c *dataHiveClient) FetchTicker(ctx context.Context, exchange, marketType, 
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	return c.convertTicker(tickerResp.Ticker), nil
+	return tickerResp.Ticker, nil
 }
 
 // FetchTickers 获取多个tickers
-func (c *dataHiveClient) FetchTickers(ctx context.Context, exchange, marketType string, symbols ...string) (map[string]*ccxt.Ticker, error) {
+func (c *dataHiveClient) FetchTickers(ctx context.Context, exchange, marketType string, symbols ...string) ([]*pb.Ticker, error) {
 	if len(symbols) == 0 {
 		return nil, fmt.Errorf("at least one symbol is required")
 	}
 
-	tickers := make(map[string]*ccxt.Ticker)
+	var tickers []*pb.Ticker
 
 	// 现在单独处理每个symbol
 	for _, symbol := range symbols {
@@ -214,14 +208,14 @@ func (c *dataHiveClient) FetchTickers(ctx context.Context, exchange, marketType 
 			return nil, fmt.Errorf("failed to unmarshal response for %s: %w", symbol, err)
 		}
 
-		tickers[tickersResp.Ticker.Symbol] = c.convertTicker(tickersResp.Ticker)
+		tickers = append(tickers, tickersResp.Ticker)
 	}
 
 	return tickers, nil
 }
 
 // FetchOHLCV 获取K线数据
-func (c *dataHiveClient) FetchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string, since int64, limit int32) ([]*ccxt.OHLCV, error) {
+func (c *dataHiveClient) FetchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string, since int64, limit int32) ([]*pb.Kline, error) {
 	req := &pb.FetchKlinesRequest{
 		Exchange:   exchange,
 		MarketType: marketType,
@@ -246,16 +240,11 @@ func (c *dataHiveClient) FetchOHLCV(ctx context.Context, exchange, marketType, s
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	var ohlcvs []*ccxt.OHLCV
-	for _, kline := range klinesResp.Klines {
-		ohlcvs = append(ohlcvs, c.convertKlineToOHLCV(kline))
-	}
-
-	return ohlcvs, nil
+	return klinesResp.Klines, nil
 }
 
 // FetchTrades 获取交易数据
-func (c *dataHiveClient) FetchTrades(ctx context.Context, exchange, marketType, symbol string, since int64, limit int32) ([]*ccxt.Trade, error) {
+func (c *dataHiveClient) FetchTrades(ctx context.Context, exchange, marketType, symbol string, since int64, limit int32) ([]*pb.Trade, error) {
 	req := &pb.FetchTradesRequest{
 		Exchange:   exchange,
 		MarketType: marketType,
@@ -279,16 +268,11 @@ func (c *dataHiveClient) FetchTrades(ctx context.Context, exchange, marketType, 
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	var trades []*ccxt.Trade
-	for _, trade := range tradesResp.Trades {
-		trades = append(trades, c.convertTrade(trade))
-	}
-
-	return trades, nil
+	return tradesResp.Trades, nil
 }
 
 // FetchOrderBook 获取订单簿
-func (c *dataHiveClient) FetchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (*ccxt.OrderBook, error) {
+func (c *dataHiveClient) FetchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (*pb.OrderBook, error) {
 	req := &pb.FetchOrderBookRequest{
 		Exchange:   exchange,
 		MarketType: marketType,
@@ -311,15 +295,15 @@ func (c *dataHiveClient) FetchOrderBook(ctx context.Context, exchange, marketTyp
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	return c.convertOrderBook(orderBookResp.Orderbook), nil
+	return orderBookResp.Orderbook, nil
 }
 
 // =============================================================================
 // Watch Methods (Real-time WebSocket)
 // =============================================================================
 
-// WatchPrice 订阅价格更新
-func (c *dataHiveClient) WatchPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *ccxt.WatchPrice, string, error) {
+// WatchTicker 订阅价格更新
+func (c *dataHiveClient) WatchTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.TickerUpdate, string, error) {
 	req := &pb.SubscribeRequest{
 		Exchange:   exchange,
 		MarketType: marketType,
@@ -347,15 +331,15 @@ func (c *dataHiveClient) WatchPrice(ctx context.Context, exchange, marketType, s
 	}
 
 	// 创建订阅
-	priceCh := make(chan *ccxt.WatchPrice, 100)
+	tickerCh := make(chan *pb.TickerUpdate, 100)
 	_, cancel := context.WithCancel(ctx)
 
 	sub := &subscription{
 		ID:       subscribeResp.Topic,
-		Type:     "price",
+		Type:     "ticker",
 		Exchange: exchange,
 		Symbol:   symbol,
-		PriceCh:  priceCh,
+		TickerCh: tickerCh,
 		cancel:   cancel,
 		done:     make(chan struct{}),
 	}
@@ -364,11 +348,11 @@ func (c *dataHiveClient) WatchPrice(ctx context.Context, exchange, marketType, s
 	c.subscriptions[sub.ID] = sub
 	c.subMutex.Unlock()
 
-	return priceCh, sub.ID, nil
+	return tickerCh, sub.ID, nil
 }
 
-// WatchOHLCV 订阅K线更新
-func (c *dataHiveClient) WatchOHLCV(ctx context.Context, exchange, marketType, symbol, timeframe string) (<-chan *ccxt.OHLCV, string, error) {
+// WatchKline 订阅K线更新
+func (c *dataHiveClient) WatchKline(ctx context.Context, exchange, marketType, symbol, timeframe string) (<-chan *pb.KlineUpdate, string, error) {
 	req := &pb.SubscribeRequest{
 		Exchange:      exchange,
 		MarketType:    marketType,
@@ -397,15 +381,15 @@ func (c *dataHiveClient) WatchOHLCV(ctx context.Context, exchange, marketType, s
 	}
 
 	// 创建订阅
-	ohlcvCh := make(chan *ccxt.OHLCV, 100)
+	klineCh := make(chan *pb.KlineUpdate, 100)
 	_, cancel := context.WithCancel(ctx)
 
 	sub := &subscription{
 		ID:       subscribeResp.Topic,
-		Type:     "ohlcv",
+		Type:     "kline",
 		Exchange: exchange,
 		Symbol:   symbol,
-		OHLCVCh:  ohlcvCh,
+		KlineCh:  klineCh,
 		cancel:   cancel,
 		done:     make(chan struct{}),
 	}
@@ -414,11 +398,11 @@ func (c *dataHiveClient) WatchOHLCV(ctx context.Context, exchange, marketType, s
 	c.subscriptions[sub.ID] = sub
 	c.subMutex.Unlock()
 
-	return ohlcvCh, sub.ID, nil
+	return klineCh, sub.ID, nil
 }
 
 // WatchTrades 订阅交易更新
-func (c *dataHiveClient) WatchTrades(ctx context.Context, exchange, marketType, symbol string) (<-chan *ccxt.Trade, string, error) {
+func (c *dataHiveClient) WatchTrades(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.TradeUpdate, string, error) {
 	req := &pb.SubscribeRequest{
 		Exchange:   exchange,
 		MarketType: marketType,
@@ -446,7 +430,7 @@ func (c *dataHiveClient) WatchTrades(ctx context.Context, exchange, marketType, 
 	}
 
 	// 创建订阅
-	tradesCh := make(chan *ccxt.Trade, 100)
+	tradesCh := make(chan *pb.TradeUpdate, 100)
 	_, cancel := context.WithCancel(ctx)
 
 	sub := &subscription{
@@ -467,7 +451,7 @@ func (c *dataHiveClient) WatchTrades(ctx context.Context, exchange, marketType, 
 }
 
 // WatchOrderBook 订阅订单簿更新
-func (c *dataHiveClient) WatchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (<-chan *ccxt.OrderBook, string, error) {
+func (c *dataHiveClient) WatchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (<-chan *pb.OrderBookUpdate, string, error) {
 	req := &pb.SubscribeRequest{
 		Exchange:       exchange,
 		MarketType:     marketType,
@@ -496,7 +480,7 @@ func (c *dataHiveClient) WatchOrderBook(ctx context.Context, exchange, marketTyp
 	}
 
 	// 创建订阅
-	orderBookCh := make(chan *ccxt.OrderBook, 100)
+	orderBookCh := make(chan *pb.OrderBookUpdate, 100)
 	_, cancel := context.WithCancel(ctx)
 
 	sub := &subscription{
@@ -572,22 +556,14 @@ func (c *dataHiveClient) handleTickerUpdate(msg *pb.Message) error {
 	sub, exists := c.subscriptions[update.Topic]
 	c.subMutex.RUnlock()
 
-	if !exists || sub.PriceCh == nil {
+	if !exists || sub.TickerCh == nil {
 		return nil
 	}
 
-	// 转换为WatchPrice格式
-	watchPrice := &ccxt.WatchPrice{
-		Symbol:     update.Ticker.Symbol,
-		Price:      update.Ticker.Last,
-		TimeStamp:  update.Ticker.Timestamp,
-		StreamName: update.Topic,
-	}
-
 	select {
-	case sub.PriceCh <- watchPrice:
+	case sub.TickerCh <- &update:
 	default:
-		c.logger.Warn("Price channel full, dropping message", zap.String("topic", update.Topic))
+		c.logger.Warn("Ticker channel full, dropping message", zap.String("topic", update.Topic))
 	}
 
 	return nil
@@ -604,16 +580,14 @@ func (c *dataHiveClient) handleKlineUpdate(msg *pb.Message) error {
 	sub, exists := c.subscriptions[update.Topic]
 	c.subMutex.RUnlock()
 
-	if !exists || sub.OHLCVCh == nil {
+	if !exists || sub.KlineCh == nil {
 		return nil
 	}
 
-	ohlcv := c.convertKlineToOHLCV(update.Kline)
-
 	select {
-	case sub.OHLCVCh <- ohlcv:
+	case sub.KlineCh <- &update:
 	default:
-		c.logger.Warn("OHLCV channel full, dropping message", zap.String("topic", update.Topic))
+		c.logger.Warn("Kline channel full, dropping message", zap.String("topic", update.Topic))
 	}
 
 	return nil
@@ -634,10 +608,8 @@ func (c *dataHiveClient) handleTradeUpdate(msg *pb.Message) error {
 		return nil
 	}
 
-	trade := c.convertTrade(update.Trade)
-
 	select {
-	case sub.TradesCh <- trade:
+	case sub.TradesCh <- &update:
 	default:
 		c.logger.Warn("Trades channel full, dropping message", zap.String("topic", update.Topic))
 	}
@@ -660,118 +632,13 @@ func (c *dataHiveClient) handleOrderBookUpdate(msg *pb.Message) error {
 		return nil
 	}
 
-	orderBook := c.convertOrderBook(update.Orderbook)
-
 	select {
-	case sub.OrderBookCh <- orderBook:
+	case sub.OrderBookCh <- &update:
 	default:
 		c.logger.Warn("OrderBook channel full, dropping message", zap.String("topic", update.Topic))
 	}
 
 	return nil
-}
-
-// =============================================================================
-// Data Conversion Functions
-// =============================================================================
-
-// convertTicker 转换ticker数据
-func (c *dataHiveClient) convertTicker(ticker *pb.Ticker) *ccxt.Ticker {
-	return &ccxt.Ticker{
-		Symbol:     ticker.Symbol,
-		TimeStamp:  ticker.Timestamp,
-		High:       ticker.High,
-		Low:        ticker.Low,
-		Bid:        ticker.Bid,
-		Ask:        ticker.Ask,
-		Last:       ticker.Last,
-		Open:       ticker.Open,
-		Close:      ticker.Close,
-		BaseVolume: ticker.Volume,
-		Change:     ticker.Change,
-		Percentage: ticker.ChangePercent,
-	}
-}
-
-// convertMarket 转换市场数据
-func (c *dataHiveClient) convertMarket(market *pb.Market) *ccxt.Market {
-	return &ccxt.Market{
-		ID:      market.Id,
-		Symbol:  market.Symbol,
-		Base:    market.Base,
-		Quote:   market.Quote,
-		Active:  market.Active,
-		Type:    market.Type,
-		Spot:    market.Spot,
-		Linear:  market.Linear,
-		Inverse: market.Inverse,
-	}
-}
-
-// convertKlineToOHLCV 转换K线数据为OHLCV
-func (c *dataHiveClient) convertKlineToOHLCV(kline *pb.Kline) *ccxt.OHLCV {
-	return &ccxt.OHLCV{
-		Timestamp: kline.OpenTime,
-		Open:      kline.Open,
-		High:      kline.High,
-		Low:       kline.Low,
-		Close:     kline.Close,
-		Volume:    kline.Volume,
-	}
-}
-
-// convertTrade 转换交易数据
-func (c *dataHiveClient) convertTrade(trade *pb.Trade) *ccxt.Trade {
-	return &ccxt.Trade{
-		ID:        trade.Id,
-		Symbol:    trade.Symbol,
-		Price:     trade.Price,
-		Amount:    trade.Quantity,
-		Side:      trade.Side,
-		Timestamp: trade.Timestamp,
-	}
-}
-
-// convertOrderBook 转换订单簿数据
-func (c *dataHiveClient) convertOrderBook(orderbook *pb.OrderBook) *ccxt.OrderBook {
-	var bids ccxt.OrderBookSide
-	var asks ccxt.OrderBookSide
-
-	// 转换bids
-	if len(orderbook.Bids) > 0 {
-		bidPrices := make([]float64, len(orderbook.Bids))
-		bidSizes := make([]float64, len(orderbook.Bids))
-		for i, bid := range orderbook.Bids {
-			bidPrices[i] = bid.Price
-			bidSizes[i] = bid.Quantity
-		}
-		bids = ccxt.OrderBookSide{
-			Price: bidPrices,
-			Size:  bidSizes,
-		}
-	}
-
-	// 转换asks
-	if len(orderbook.Asks) > 0 {
-		askPrices := make([]float64, len(orderbook.Asks))
-		askSizes := make([]float64, len(orderbook.Asks))
-		for i, ask := range orderbook.Asks {
-			askPrices[i] = ask.Price
-			askSizes[i] = ask.Quantity
-		}
-		asks = ccxt.OrderBookSide{
-			Price: askPrices,
-			Size:  askSizes,
-		}
-	}
-
-	return &ccxt.OrderBook{
-		Symbol:    orderbook.Symbol,
-		Bids:      bids,
-		Asks:      asks,
-		TimeStamp: orderbook.Timestamp,
-		Nonce:     0, // 如果protocol中有nonce字段可以添加
-	}
 }
 
 // =============================================================================
@@ -785,11 +652,11 @@ func (c *dataHiveClient) closeSubscription(sub *subscription) {
 	}
 
 	// 关闭channels
-	if sub.PriceCh != nil {
-		close(sub.PriceCh)
+	if sub.TickerCh != nil {
+		close(sub.TickerCh)
 	}
-	if sub.OHLCVCh != nil {
-		close(sub.OHLCVCh)
+	if sub.KlineCh != nil {
+		close(sub.KlineCh)
 	}
 	if sub.TradesCh != nil {
 		close(sub.TradesCh)
