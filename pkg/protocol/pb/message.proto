@@ -160,6 +160,13 @@ message Trade {
   int64 timestamp = 7;        // 成交时间
 }
 
+// Price 价格数据
+message Price {
+  string symbol = 1;          // 交易对符号
+  double price = 2;           // 价格
+  int64 timestamp = 3;        // 时间戳
+}
+
 // OrderBook 订单簿
 message OrderBook {
   string symbol = 1;          // 交易对符号
@@ -310,9 +317,7 @@ message FetchOrderBookResponse {
 // PriceUpdate 轻量级价格更新推送
 message PriceUpdate {
   string topic = 1;        // 订阅topic作为唯一标识
-  string symbol = 2;       // 交易对符号
-  double price = 3;        // 价格
-  int64 timestamp = 4;     // 时间戳
+  Price price = 2;         // 价格数据
 }
 
 // KlineUpdate K线更新推送

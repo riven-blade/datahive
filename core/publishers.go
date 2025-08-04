@@ -61,12 +61,17 @@ func (p *EventPublisher) serializePriceUpdate(event Event) ([]byte, error) {
 		return nil, fmt.Errorf("invalid price data type, expected map[string]interface{}")
 	}
 
-	// 转换为protobuf格式的轻量级价格更新
-	priceUpdate := &pb.PriceUpdate{
-		Topic:     event.Topic,
+	// 创建独立的 Price 结构体
+	price := &pb.Price{
 		Symbol:    getStringFromData(priceData, "symbol"),
 		Price:     getFloat64FromData(priceData, "price"),
 		Timestamp: getInt64FromData(priceData, "timestamp"),
+	}
+
+	// 转换为protobuf格式的轻量级价格更新
+	priceUpdate := &pb.PriceUpdate{
+		Topic: event.Topic,
+		Price: price,
 	}
 
 	return proto.Marshal(priceUpdate)
