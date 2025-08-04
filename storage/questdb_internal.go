@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/logger"
 
 	"go.uber.org/zap"
 )

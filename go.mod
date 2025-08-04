@@ -1,4 +1,4 @@
-module datahive
+module github.com/riven-blade/datahive
 
 go 1.23.0
 

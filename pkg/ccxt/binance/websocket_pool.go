@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"datahive/pkg/ccxt"
-	"datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/logger"
 
 	"go.uber.org/zap"
 )

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"datahive/pkg/protocol/pb"
-	"datahive/pkg/server"
+	"github.com/riven-blade/datahive/pkg/protocol/pb"
+	"github.com/riven-blade/datahive/pkg/server"
 
 	"google.golang.org/protobuf/proto"
 )

@@ -7,9 +7,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"datahive/pkg/logger"
-	"datahive/pkg/protocol"
-	"datahive/pkg/protocol/pb"
+	"github.com/riven-blade/datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/protocol"
+	"github.com/riven-blade/datahive/pkg/protocol/pb"
 
 	"github.com/panjf2000/gnet/v2"
 	"go.uber.org/zap"

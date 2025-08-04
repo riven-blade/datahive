@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"datahive/pkg/logger"
-	"datahive/pkg/protocol/pb"
+	"github.com/riven-blade/datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/protocol/pb"
 
 	"go.uber.org/zap"
 )

@@ -3,7 +3,7 @@ package client
 import (
 	"time"
 
-	"datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/logger"
 )
 
 // Config TCP客户端配置

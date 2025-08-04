@@ -11,7 +11,7 @@ import (
 
 const (
 	// 应用配置
-	DefaultAppName  = "DataHive-Spider"
+	DefaultAppName  = "github.com/riven-blade/datahive/-Spider"
 	DefaultLogLevel = "info"
 
 	// 服务器配置

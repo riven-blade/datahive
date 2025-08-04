@@ -2,12 +2,12 @@ package core
 
 import (
 	"context"
-	"datahive/pkg/ccxt"
-	"datahive/pkg/logger"
-	"datahive/pkg/protocol/pb"
-	"datahive/pkg/server"
-	"datahive/pkg/utils"
 	"fmt"
+	"github.com/riven-blade/datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/protocol/pb"
+	"github.com/riven-blade/datahive/pkg/server"
+	"github.com/riven-blade/datahive/pkg/utils"
 	"strings"
 
 	"go.uber.org/zap"

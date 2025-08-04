@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package pb;
 
-option go_package = "datahive/pkg/protocol/pb";
+option go_package = "github.com/riven-blade/datahive/pkg/protocol/pb";
 
 // =====================================================================================
 // 基础消息结构

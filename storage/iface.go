@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"datahive/pkg/protocol/pb"
+	"github.com/riven-blade/datahive/pkg/protocol/pb"
 )
 
 // TimeSeriesStorage 时序数据存储接口

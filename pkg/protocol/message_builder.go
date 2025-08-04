@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"datahive/pkg/protocol/pb"
+	"github.com/riven-blade/datahive/pkg/protocol/pb"
 
 	"google.golang.org/protobuf/proto"
 )

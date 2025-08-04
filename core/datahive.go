@@ -2,23 +2,23 @@ package core
 
 import (
 	"context"
-	"datahive/pkg/protocol/pb"
-	"datahive/pkg/server"
-	"datahive/storage"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/riven-blade/datahive/pkg/protocol/pb"
+	"github.com/riven-blade/datahive/pkg/server"
+	"github.com/riven-blade/datahive/storage"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"datahive/config"
-	"datahive/pkg/ccxt"
-	_ "datahive/pkg/ccxt/binance" // Register Binance exchange
-	_ "datahive/pkg/ccxt/bybit"   // Register Bybit exchange
-	"datahive/pkg/logger"
-	"datahive/pkg/utils"
+	"github.com/riven-blade/datahive/config"
+	"github.com/riven-blade/datahive/pkg/ccxt"
+	_ "github.com/riven-blade/datahive/pkg/ccxt/binance" // Register Binance exchange
+	_ "github.com/riven-blade/datahive/pkg/ccxt/bybit"   // Register Bybit exchange
+	"github.com/riven-blade/datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/utils"
 
 	"go.uber.org/zap"
 )

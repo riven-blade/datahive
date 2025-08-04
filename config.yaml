@@ -1,6 +1,6 @@
-# DataHive Configuration
+# github.com/riven-blade/datahive/ Configuration
 app:
-  name: "DataHive"
+  name: "github.com/riven-blade/datahive/"
   version: "1.0.0"
   environment: "development"
 
@@ -71,7 +71,7 @@ exchanges:
 logging:
   level: "debug"
   format: "text"
-  output: "logs/datahive.log"
+  output: "logs/github.com/riven-blade/datahive/.log"
   maxSize: 100 # MB
   maxBackups: 7
   maxAge: 30 # days

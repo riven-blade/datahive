@@ -7,10 +7,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"datahive/pkg/ccxt"
-	"datahive/pkg/utils"
+	"github.com/riven-blade/datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/utils"
 
 	"github.com/spf13/cast"
+	"go.uber.org/zap"
 )
 
 // ========== Binance WebSocket 实现 ==========
@@ -268,13 +270,21 @@ func (ws *BinanceWebSocket) handleUserDataMessage(data []byte) error {
 		return nil
 	}
 
-	// 用户数据流事件处理 - TODO: 集成到StreamManager
+	// 用户数据流事件处理 - 集成到StreamManager
 	switch eventType {
 	case "outboundAccountPosition", "balanceUpdate":
-		// 余额更新事件 - 暂时忽略，等待StreamManager集成
+		// 余额更新事件 - 路由到StreamManager
+		if ws.streamManager != nil {
+			return ws.streamManager.RouteMessage(data)
+		}
+		logger.Debug("StreamManager not available for balance event", zap.String("eventType", eventType))
 		return nil
 	case "executionReport":
-		// 订单执行报告 - 暂时忽略，等待StreamManager集成
+		// 订单执行报告 - 路由到StreamManager
+		if ws.streamManager != nil {
+			return ws.streamManager.RouteMessage(data)
+		}
+		logger.Debug("StreamManager not available for order event", zap.String("eventType", eventType))
 		return nil
 	}
 

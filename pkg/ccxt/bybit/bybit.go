@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/ccxt"
 
 	"github.com/spf13/cast"
 )

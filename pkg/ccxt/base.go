@@ -286,7 +286,7 @@ func NewBaseExchange(id, name, version string, countries []string) *BaseExchange
 		timeout:         30 * time.Second,
 		rateLimit:       1000,
 		enableRateLimit: true,
-		userAgent:       "datahive/1.0.0",
+		userAgent:       "github.com/riven-blade/datahive/1.0.0",
 		headers:         make(map[string]string),
 		has:             make(map[string]bool),
 		timeframes:      make(map[string]string),

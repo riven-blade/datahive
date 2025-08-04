@@ -2,8 +2,8 @@ package storage
 
 import (
 	"context"
-	"datahive/config"
-	"datahive/pkg/logger"
+	"github.com/riven-blade/datahive/config"
+	"github.com/riven-blade/datahive/pkg/logger"
 	"sync"
 
 	"go.uber.org/zap"

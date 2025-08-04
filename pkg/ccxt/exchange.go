@@ -117,7 +117,7 @@ func NewDefaultExchangeConfig() *DefaultExchangeConfig {
 		timeout:         30 * time.Second,
 		rateLimit:       1000,
 		enableRateLimit: true,
-		userAgent:       "DataHive/1.0.0",
+		userAgent:       "github.com/riven-blade/datahive/1.0.0",
 		marketType:      "spot",
 		headers:         make(map[string]string),
 		options:         make(map[string]interface{}),

@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"datahive/pkg/ccxt"
-	"datahive/pkg/logger"
-	"datahive/pkg/utils"
+	"github.com/riven-blade/datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/utils"
 
 	"github.com/spf13/cast"
 	"go.uber.org/zap"
@@ -193,6 +194,15 @@ func (sm *StreamManager) constructStreamName(symbol, eventType string, msg map[s
 		return fmt.Sprintf("%s@kline_1m", symbol) // 默认1m
 	case "depthUpdate":
 		return fmt.Sprintf("%s@depth", symbol)
+	case "outboundAccountPosition", "balanceUpdate":
+		// 用户余额事件不依赖于特定交易对
+		return "user@balance"
+	case "executionReport":
+		// 订单执行报告可以按交易对分组，也可以统一处理
+		if symbol != "" {
+			return fmt.Sprintf("%s@orders", symbol)
+		}
+		return "user@orders"
 	default:
 		return fmt.Sprintf("%s@%s", symbol, eventType)
 	}
@@ -241,6 +251,10 @@ func (sm *StreamManager) processStreamMessage(rawMessage []byte, subscribers *St
 		return sm.processTrade(data, subscribers)
 	case "kline":
 		return sm.processKline(data, subscribers)
+	case "balance":
+		return sm.processBalance(data, subscribers)
+	case "orders":
+		return sm.processOrder(data, subscribers)
 	default:
 		return fmt.Errorf("unknown data type: %s", subscribers.dataType)
 	}
@@ -298,15 +312,25 @@ func (ss *StreamSubscribers) Subscribe(dataType string) (string, interface{}, er
 // parseStreamName 解析stream名称
 // 例如: "btcusdt@ticker" -> symbol="BTCUSDT", dataType="ticker", timeframe=""
 // 例如: "btcusdt@kline_1m" -> symbol="BTCUSDT", dataType="kline", timeframe="1m"
+// 例如: "user@balance" -> symbol="", dataType="balance", timeframe=""
+// 例如: "user@orders" -> symbol="", dataType="orders", timeframe=""
 func (sm *StreamManager) parseStreamName(streamName string) (symbol, dataType, timeframe string) {
 	parts := strings.Split(streamName, "@")
 	if len(parts) != 2 {
 		return "", "", ""
 	}
 
-	symbol = strings.ToUpper(parts[0])
-
+	symbolPart := parts[0]
 	streamType := parts[1]
+
+	// 处理用户数据流
+	if symbolPart == "user" {
+		return "", streamType, ""
+	}
+
+	// 处理市场数据流
+	symbol = strings.ToUpper(symbolPart)
+
 	if strings.HasPrefix(streamType, "kline_") {
 		dataType = "kline"
 		timeframe = strings.TrimPrefix(streamType, "kline_")
@@ -352,15 +376,55 @@ func (sm *StreamManager) processTicker(data map[string]interface{}, subscribers 
 func (sm *StreamManager) processDepth(data map[string]interface{}, subscribers *StreamSubscribers) error {
 	timestamp := utils.SafeGetInt64WithDefault(data, "E", time.Now().UnixMilli())
 
+	// 解析 bids 数据
+	bidPrices := make([]float64, 0)
+	bidSizes := make([]float64, 0)
+	if bidsData, ok := data["b"].([]interface{}); ok {
+		for _, bidItem := range bidsData {
+			if bidArray, ok := bidItem.([]interface{}); ok && len(bidArray) >= 2 {
+				if priceStr, ok := bidArray[0].(string); ok {
+					if price, err := strconv.ParseFloat(priceStr, 64); err == nil && price > 0 {
+						bidPrices = append(bidPrices, price)
+					}
+				}
+				if sizeStr, ok := bidArray[1].(string); ok {
+					if size, err := strconv.ParseFloat(sizeStr, 64); err == nil && size > 0 {
+						bidSizes = append(bidSizes, size)
+					}
+				}
+			}
+		}
+	}
+
+	// 解析 asks 数据
+	askPrices := make([]float64, 0)
+	askSizes := make([]float64, 0)
+	if asksData, ok := data["a"].([]interface{}); ok {
+		for _, askItem := range asksData {
+			if askArray, ok := askItem.([]interface{}); ok && len(askArray) >= 2 {
+				if priceStr, ok := askArray[0].(string); ok {
+					if price, err := strconv.ParseFloat(priceStr, 64); err == nil && price > 0 {
+						askPrices = append(askPrices, price)
+					}
+				}
+				if sizeStr, ok := askArray[1].(string); ok {
+					if size, err := strconv.ParseFloat(sizeStr, 64); err == nil && size > 0 {
+						askSizes = append(askSizes, size)
+					}
+				}
+			}
+		}
+	}
+
 	orderBook := &ccxt.WatchOrderBook{
 		OrderBook: ccxt.OrderBook{
 			Symbol:    subscribers.symbol,
 			TimeStamp: timestamp,
 			Datetime:  time.Unix(timestamp/1000, (timestamp%1000)*1000000).UTC().Format(time.RFC3339),
-			// TODO: 解析 bids/asks 数据
-			Bids: ccxt.OrderBookSide{Price: make([]float64, 0), Size: make([]float64, 0)},
-			Asks: ccxt.OrderBookSide{Price: make([]float64, 0), Size: make([]float64, 0)},
-			Info: data,
+			Bids:      ccxt.OrderBookSide{Price: bidPrices, Size: bidSizes},
+			Asks:      ccxt.OrderBookSide{Price: askPrices, Size: askSizes},
+			Nonce:     utils.SafeGetInt64WithDefault(data, "u", 0), // Final update ID
+			Info:      data,
 		},
 		StreamName: subscribers.streamName, // 设置StreamName为stream name
 	}
@@ -449,6 +513,74 @@ func (sm *StreamManager) processKline(data map[string]interface{}, subscribers *
 	for _, ch := range klineSubs {
 		select {
 		case ch <- ohlcv:
+		default:
+			// channel满了就跳过
+		}
+	}
+
+	return nil
+}
+
+func (sm *StreamManager) processBalance(data map[string]interface{}, subscribers *StreamSubscribers) error {
+	logger.Debug("Processing balance data",
+		zap.String("stream", subscribers.streamName),
+		zap.Int("subscribers", len(subscribers.balanceSubs)))
+
+	// 使用现有的解析器解析余额数据
+	binanceInstance := &Binance{} // 临时实例用于解析
+	account := binanceInstance.parseAccountBalance(data)
+	if account == nil {
+		return fmt.Errorf("failed to parse account balance data")
+	}
+
+	// 转换为 WatchBalance 格式
+	watchBalance := &ccxt.WatchBalance{
+		Account:    *account,
+		StreamName: subscribers.streamName,
+	}
+
+	// 分发给所有订阅者
+	subscribers.mu.RLock()
+	balanceSubs := subscribers.balanceSubs
+	subscribers.mu.RUnlock()
+
+	for _, ch := range balanceSubs {
+		select {
+		case ch <- watchBalance:
+		default:
+			// channel满了就跳过
+		}
+	}
+
+	return nil
+}
+
+func (sm *StreamManager) processOrder(data map[string]interface{}, subscribers *StreamSubscribers) error {
+	logger.Debug("Processing order data",
+		zap.String("stream", subscribers.streamName),
+		zap.Int("subscribers", len(subscribers.orderSubs)))
+
+	// 使用现有的解析器解析订单数据
+	binanceInstance := &Binance{} // 临时实例用于解析
+	order := binanceInstance.parseOrderUpdate(data)
+	if order == nil {
+		return fmt.Errorf("failed to parse order update data")
+	}
+
+	// 转换为 WatchOrder 格式
+	watchOrder := &ccxt.WatchOrder{
+		Order:      *order,
+		StreamName: subscribers.streamName,
+	}
+
+	// 分发给所有订阅者
+	subscribers.mu.RLock()
+	orderSubs := subscribers.orderSubs
+	subscribers.mu.RUnlock()
+
+	for _, ch := range orderSubs {
+		select {
+		case ch <- watchOrder:
 		default:
 			// channel满了就跳过
 		}

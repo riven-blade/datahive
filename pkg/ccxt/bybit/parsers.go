@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/ccxt"
 )
 
 // ========== 市场数据解析器 ==========

@@ -2,11 +2,12 @@ package binance
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
-	"datahive/pkg/ccxt"
-	"datahive/pkg/utils"
+	"github.com/riven-blade/datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/utils"
 )
 
 // ========== 市场数据解析器 ==========
@@ -334,6 +335,118 @@ func (b *Binance) parseSpotBalance(account *AccountResponse) *ccxt.Account {
 		Total:     total,
 		Timestamp: account.UpdateTime,
 		Datetime:  b.ISO8601(account.UpdateTime),
+	}
+}
+
+// parseMarginBalance 解析保证金余额
+func (b *Binance) parseMarginBalance(account *MarginAccountResponse) *ccxt.Account {
+	balances := make(map[string]ccxt.Balance)
+	free := make(map[string]float64)
+	used := make(map[string]float64)
+	total := make(map[string]float64)
+
+	for _, asset := range account.UserAssets {
+		currency := asset.Asset
+		freeAmount := b.SafeFloat(map[string]interface{}{"value": asset.Free}, "value", 0)
+		lockedAmount := b.SafeFloat(map[string]interface{}{"value": asset.Locked}, "value", 0)
+		borrowedAmount := b.SafeFloat(map[string]interface{}{"value": asset.Borrowed}, "value", 0)
+		interestAmount := b.SafeFloat(map[string]interface{}{"value": asset.Interest}, "value", 0)
+
+		// 总的使用中余额包括锁定、借入和利息
+		usedAmount := lockedAmount + borrowedAmount + interestAmount
+		totalAmount := freeAmount + usedAmount
+
+		if totalAmount > 0 || borrowedAmount > 0 {
+			balances[currency] = ccxt.Balance{
+				Free:  freeAmount,
+				Used:  usedAmount,
+				Total: totalAmount,
+			}
+			free[currency] = freeAmount
+			used[currency] = usedAmount
+			total[currency] = totalAmount
+		}
+	}
+
+	// 转换为map供Info字段使用
+	accountInfo := map[string]interface{}{
+		"borrowEnabled":       account.BorrowEnabled,
+		"marginLevel":         account.MarginLevel,
+		"totalAssetOfBtc":     account.TotalAssetOfBtc,
+		"totalLiabilityOfBtc": account.TotalLiabilityOfBtc,
+		"totalNetAssetOfBtc":  account.TotalNetAssetOfBtc,
+		"tradeEnabled":        account.TradeEnabled,
+		"transferEnabled":     account.TransferEnabled,
+		"userAssets":          account.UserAssets,
+	}
+
+	return &ccxt.Account{
+		Info:      accountInfo,
+		Type:      "margin",
+		Balances:  balances,
+		Free:      free,
+		Used:      used,
+		Total:     total,
+		Timestamp: b.Milliseconds(),
+		Datetime:  b.ISO8601(b.Milliseconds()),
+	}
+}
+
+// parseFuturesBalance 解析期货余额
+func (b *Binance) parseFuturesBalance(balances []FuturesBalanceResponse) *ccxt.Account {
+	ccxtBalances := make(map[string]ccxt.Balance)
+	free := make(map[string]float64)
+	used := make(map[string]float64)
+	total := make(map[string]float64)
+
+	for _, balance := range balances {
+		currency := balance.Asset
+		balanceAmount := b.SafeFloat(map[string]interface{}{"value": balance.Balance}, "value", 0)
+		availableAmount := b.SafeFloat(map[string]interface{}{"value": balance.AvailableBalance}, "value", 0)
+
+		// 期货账户中，使用中的余额是总余额减去可用余额
+		usedAmount := balanceAmount - availableAmount
+		if usedAmount < 0 {
+			usedAmount = 0
+		}
+
+		if balanceAmount > 0 {
+			ccxtBalances[currency] = ccxt.Balance{
+				Free:  availableAmount,
+				Used:  usedAmount,
+				Total: balanceAmount,
+			}
+			free[currency] = availableAmount
+			used[currency] = usedAmount
+			total[currency] = balanceAmount
+		}
+	}
+
+	// 转换为map供Info字段使用
+	accountInfo := make(map[string]interface{})
+	for i, balance := range balances {
+		accountInfo[fmt.Sprintf("balance_%d", i)] = map[string]interface{}{
+			"accountAlias":       balance.AccountAlias,
+			"asset":              balance.Asset,
+			"balance":            balance.Balance,
+			"crossWalletBalance": balance.CrossWalletBalance,
+			"crossUnPnl":         balance.CrossUnPnl,
+			"availableBalance":   balance.AvailableBalance,
+			"maxWithdrawAmount":  balance.MaxWithdrawAmount,
+			"marginAvailable":    balance.MarginAvailable,
+			"updateTime":         balance.UpdateTime,
+		}
+	}
+
+	return &ccxt.Account{
+		Info:      accountInfo,
+		Type:      "futures",
+		Balances:  ccxtBalances,
+		Free:      free,
+		Used:      used,
+		Total:     total,
+		Timestamp: b.Milliseconds(),
+		Datetime:  b.ISO8601(b.Milliseconds()),
 	}
 }
 

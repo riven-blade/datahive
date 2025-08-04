@@ -415,6 +415,19 @@ type MarginAccountAsset struct {
 	NetAsset string `json:"netAsset"`
 }
 
+// FuturesBalanceResponse 期货余额响应
+type FuturesBalanceResponse struct {
+	AccountAlias       string `json:"accountAlias"`
+	Asset              string `json:"asset"`
+	Balance            string `json:"balance"`
+	CrossWalletBalance string `json:"crossWalletBalance"`
+	CrossUnPnl         string `json:"crossUnPnl"`
+	AvailableBalance   string `json:"availableBalance"`
+	MaxWithdrawAmount  string `json:"maxWithdrawAmount"`
+	MarginAvailable    bool   `json:"marginAvailable"`
+	UpdateTime         int64  `json:"updateTime"`
+}
+
 // ========== 错误响应类型 ==========
 
 // ErrorResponse Binance错误响应

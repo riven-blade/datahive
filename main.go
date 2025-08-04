@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"datahive/config"
-	"datahive/core"
-	"datahive/pkg/logger"
+	"github.com/riven-blade/datahive/config"
+	"github.com/riven-blade/datahive/core"
+	"github.com/riven-blade/datahive/pkg/logger"
 
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"

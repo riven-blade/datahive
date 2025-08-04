@@ -2,7 +2,7 @@ package storage
 
 import (
 	"context"
-	"datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/logger"
 	"sync/atomic"
 	"time"
 

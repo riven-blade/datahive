@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"datahive/pkg/ccxt"
-	"datahive/pkg/logger"
-	"datahive/pkg/protocol/pb"
-	storagelib "datahive/storage"
+	"github.com/riven-blade/datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/protocol/pb"
+	storagelib "github.com/riven-blade/datahive/storage"
 
 	"github.com/spf13/cast"
 	"go.uber.org/zap"

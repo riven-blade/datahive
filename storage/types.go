@@ -3,8 +3,8 @@ package storage
 import (
 	"time"
 
-	"datahive/pkg/ccxt"
-	"datahive/pkg/protocol/pb"
+	"github.com/riven-blade/datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/protocol/pb"
 )
 
 // TypeConverter 类型转换器，处理protocol和ccxt类型之间的转换

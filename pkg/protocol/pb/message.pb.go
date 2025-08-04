@@ -2286,7 +2286,7 @@ const file_pkg_protocol_pb_message_proto_rawDesc = "" +
 	"\x06TICKER\x10\x00\x12\t\n" +
 	"\x05KLINE\x10\x01\x12\t\n" +
 	"\x05TRADE\x10\x02\x12\r\n" +
-	"\tORDERBOOK\x10\x03B\x1aZ\x18datahive/pkg/protocol/pbb\x06proto3"
+	"\tORDERBOOK\x10\x03B\x1aZ\x18github.com/riven-blade/datahive/pkg/protocol/pbb\x06proto3"
 
 var (
 	file_pkg_protocol_pb_message_proto_rawDescOnce sync.Once

@@ -15,7 +15,7 @@ import (
 
 	"github.com/spf13/cast"
 
-	"datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/ccxt"
 )
 
 // 注册Binance交易所
@@ -2133,14 +2133,44 @@ func (b *Binance) loadMarketsIfNeeded(ctx context.Context) error {
 
 // fetchMarginBalance 获取保证金余额
 func (b *Binance) fetchMarginBalance(ctx context.Context, params map[string]interface{}) (*ccxt.Account, error) {
-	// 暂时返回现货余额，实际项目中应该调用保证金API
-	return b.FetchBalance(ctx, params)
+	if err := b.loadMarketsIfNeeded(ctx); err != nil {
+		return nil, err
+	}
+
+	// 调用保证金账户API
+	response, err := b.PrivateAPI(ctx, "marginAccount", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var marginData MarginAccountResponse
+	responseBytes, _ := json.Marshal(response)
+	if err := json.Unmarshal(responseBytes, &marginData); err != nil {
+		return nil, err
+	}
+
+	return b.parseMarginBalance(&marginData), nil
 }
 
 // fetchFuturesBalance 获取期货余额
 func (b *Binance) fetchFuturesBalance(ctx context.Context, params map[string]interface{}) (*ccxt.Account, error) {
-	// 暂时返回现货余额，实际项目中应该调用期货API
-	return b.FetchBalance(ctx, params)
+	if err := b.loadMarketsIfNeeded(ctx); err != nil {
+		return nil, err
+	}
+
+	// 调用期货余额API
+	response, err := b.PrivateAPI(ctx, "futuresBalance", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var futuresData []FuturesBalanceResponse
+	responseBytes, _ := json.Marshal(response)
+	if err := json.Unmarshal(responseBytes, &futuresData); err != nil {
+		return nil, err
+	}
+
+	return b.parseFuturesBalance(futuresData), nil
 }
 
 // getMarket 获取市场信息
