@@ -75,11 +75,9 @@ type GNetConnection struct {
 	// 状态
 	closed int32
 
-	// 消息缓冲区 - 用于处理TCP流式传输
-	buffer       []byte
-	bufferMu     sync.Mutex
-	expectedLen  uint32
-	headerParsed bool
+	// 协议编解码器
+	codec     *protocol.GNetCodec
+	msgBuffer *protocol.MessageBuffer
 
 	// 统计
 	stats *ConnectionStats
@@ -91,13 +89,18 @@ func NewGNetConnection(conn gnet.Conn, cfg *Config, router Router) *GNetConnecti
 		cfg = DefaultConfig()
 	}
 
+	// 创建协议编解码器
+	codec := protocol.NewGNetCodec()
+	msgBuffer := protocol.NewMessageBuffer(codec)
+
 	return &GNetConnection{
-		conn:     conn,
-		config:   cfg,
-		router:   router,
-		handlers: make(map[pb.ActionType]MessageHandler),
-		topics:   make(map[string]bool),
-		buffer:   make([]byte, 0, 8192), // 初始化缓冲区
+		conn:      conn,
+		config:    cfg,
+		router:    router,
+		handlers:  make(map[pb.ActionType]MessageHandler),
+		topics:    make(map[string]bool),
+		codec:     codec,
+		msgBuffer: msgBuffer,
 		stats: &ConnectionStats{
 			ConnectedAt:  time.Now(),
 			LastActivity: time.Now(),
@@ -111,28 +114,20 @@ func (c *GNetConnection) WriteMessage(msg *pb.Message) error {
 		return fmt.Errorf("connection closed")
 	}
 
-	builder := protocol.NewBuilder()
-	data, err := builder.MarshalMessage(msg)
+	// 使用协议包编码消息
+	data, err := c.codec.EncodeMessage(msg)
 	if err != nil {
 		atomic.AddInt64(&c.stats.ErrorsCount, 1)
-		return fmt.Errorf("marshal message failed: %w", err)
+		return fmt.Errorf("encode message failed: %w", err)
 	}
 
-	// 添加长度前缀
-	lengthPrefix := make([]byte, 4)
-	lengthPrefix[0] = byte(len(data) >> 24)
-	lengthPrefix[1] = byte(len(data) >> 16)
-	lengthPrefix[2] = byte(len(data) >> 8)
-	lengthPrefix[3] = byte(len(data))
-
 	// 异步写入
-	fullData := append(lengthPrefix, data...)
-	err = c.conn.AsyncWrite(fullData, func(conn gnet.Conn, err error) error {
+	err = c.conn.AsyncWrite(data, func(conn gnet.Conn, err error) error {
 		if err != nil {
 			atomic.AddInt64(&c.stats.ErrorsCount, 1)
 		} else {
 			atomic.AddInt64(&c.stats.MessagesWritten, 1)
-			atomic.AddInt64(&c.stats.BytesWritten, int64(len(fullData)))
+			atomic.AddInt64(&c.stats.BytesWritten, int64(len(data)))
 			c.stats.LastActivity = time.Now()
 		}
 		return err
@@ -146,7 +141,7 @@ func (c *GNetConnection) ReadMessage() (*pb.Message, error) {
 	return nil, fmt.Errorf("use OnTraffic in gnet mode")
 }
 
-// OnTraffic 处理gnet流量事件 - 支持流式TCP消息解析
+// OnTraffic 处理gnet流量事件 - 使用协议包解析
 func (c *GNetConnection) OnTraffic(data []byte) error {
 	if c.IsClosed() {
 		return fmt.Errorf("connection closed")
@@ -156,81 +151,23 @@ func (c *GNetConnection) OnTraffic(data []byte) error {
 	atomic.AddInt64(&c.stats.BytesRead, int64(len(data)))
 	c.stats.LastActivity = time.Now()
 
-	c.bufferMu.Lock()
-	defer c.bufferMu.Unlock()
+	// 使用协议包处理接收到的数据
+	messages, err := c.msgBuffer.ProcessData(data)
+	if err != nil {
+		atomic.AddInt64(&c.stats.ErrorsCount, 1)
+		return fmt.Errorf("failed to process message data: %w", err)
+	}
 
-	// 将新数据添加到缓冲区
-	c.buffer = append(c.buffer, data...)
-
-	// 循环处理缓冲区中的完整消息
-	for {
-		processed, err := c.processBuffer()
-		if err != nil {
+	// 处理解析出的所有消息
+	for _, msg := range messages {
+		atomic.AddInt64(&c.stats.MessagesRead, 1)
+		if err := c.ProcessMessage(msg); err != nil {
 			atomic.AddInt64(&c.stats.ErrorsCount, 1)
-			return err
-		}
-		if !processed {
-			break // 没有更多完整消息可处理
+			return fmt.Errorf("failed to process message: %w", err)
 		}
 	}
 
 	return nil
-}
-
-// processBuffer 处理缓冲区中的消息
-func (c *GNetConnection) processBuffer() (bool, error) {
-	// 如果还没有解析消息头，尝试解析消息长度
-	if !c.headerParsed {
-		if len(c.buffer) < 4 {
-			return false, nil // 需要更多数据来读取消息头
-		}
-
-		// 解析消息长度（4字节大端序）
-		c.expectedLen = uint32(c.buffer[0])<<24 |
-			uint32(c.buffer[1])<<16 |
-			uint32(c.buffer[2])<<8 |
-			uint32(c.buffer[3])
-		c.headerParsed = true
-
-		// 检查消息长度是否合理（防止恶意攻击）
-		if c.expectedLen > 1024*1024*10 { // 10MB 限制
-			return false, fmt.Errorf("message too large: %d bytes", c.expectedLen)
-		}
-	}
-
-	// 检查是否有完整的消息
-	totalLen := 4 + c.expectedLen
-	if len(c.buffer) < int(totalLen) {
-		return false, nil // 需要更多数据
-	}
-
-	// 提取消息数据
-	messageData := c.buffer[4:totalLen]
-
-	// 解析消息
-	var msg pb.Message
-	builder := protocol.NewBuilder()
-	if err := builder.UnmarshalMessage(messageData, &msg); err != nil {
-		return false, fmt.Errorf("unmarshal message failed: %w", err)
-	}
-
-	atomic.AddInt64(&c.stats.MessagesRead, 1)
-
-	// 移除已处理的数据
-	c.buffer = c.buffer[totalLen:]
-	c.headerParsed = false
-	c.expectedLen = 0
-
-	// 处理消息（在锁外执行以避免死锁）
-	c.bufferMu.Unlock()
-	err := c.ProcessMessage(&msg)
-	c.bufferMu.Lock()
-
-	if err != nil {
-		return false, err
-	}
-
-	return true, nil // 成功处理了一条消息
 }
 
 // Close 关闭连接
@@ -242,12 +179,10 @@ func (c *GNetConnection) Close() error {
 		c.topics = make(map[string]bool) // 清空所有订阅
 		c.topicsMu.Unlock()
 
-		// 清理缓冲区
-		c.bufferMu.Lock()
-		c.buffer = nil
-		c.headerParsed = false
-		c.expectedLen = 0
-		c.bufferMu.Unlock()
+		// 清理协议缓冲区
+		if c.msgBuffer != nil {
+			c.msgBuffer.Clear()
+		}
 
 		if topicCount > 0 {
 			// 记录日志

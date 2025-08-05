@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/riven-blade/datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/protocol"
 	"github.com/riven-blade/datahive/pkg/protocol/pb"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/panjf2000/gnet/v2"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/proto"
 )
 
 // MessageHandler 消息处理器
@@ -123,6 +124,10 @@ type TCPClient struct {
 	// 统计信息
 	stats   *ClientStats
 	statsMu sync.RWMutex
+
+	// 协议编解码器
+	codec     *protocol.GNetCodec
+	msgBuffer *protocol.MessageBuffer
 }
 
 // NewTCPClient 创建TCP客户端
@@ -137,6 +142,10 @@ func NewTCPClient(cfg *Config) (Client, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// 创建协议编解码器
+	codec := protocol.NewGNetCodec()
+	msgBuffer := protocol.NewMessageBuffer(codec)
+
 	client := &TCPClient{
 		config:          cfg,
 		logger:          cfg.Logger,
@@ -145,6 +154,8 @@ func NewTCPClient(cfg *Config) (Client, error) {
 		stats:           &ClientStats{},
 		ctx:             ctx,
 		cancel:          cancel,
+		codec:           codec,
+		msgBuffer:       msgBuffer,
 	}
 
 	atomic.StoreInt32(&client.state, int32(StateDisconnected))
@@ -239,11 +250,13 @@ func (c *TCPClient) SendMessage(msg *pb.Message) error {
 		return fmt.Errorf("not connected")
 	}
 
-	data, err := proto.Marshal(msg)
+	// 使用协议包编码消息
+	data, err := c.codec.EncodeMessage(msg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
+		return fmt.Errorf("failed to encode message: %w", err)
 	}
 
+	// 发送编码后的数据
 	_, err = c.conn.Write(data)
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
@@ -411,29 +424,42 @@ func (c *TCPClient) OnClose(gc gnet.Conn, err error) gnet.Action {
 }
 
 func (c *TCPClient) OnTraffic(gc gnet.Conn) gnet.Action {
-	// 读取消息
+	// 读取数据
 	data, err := gc.Next(-1)
 	if err != nil {
 		c.notifyError(fmt.Errorf("failed to read data: %w", err))
 		return gnet.None
 	}
 
-	// 处理消息
-	var msg pb.Message
-	if err := proto.Unmarshal(data, &msg); err != nil {
-		c.notifyError(fmt.Errorf("failed to unmarshal message: %w", err))
+	// 处理流式TCP消息
+	if err := c.onTrafficData(data); err != nil {
+		c.notifyError(fmt.Errorf("failed to process traffic data: %w", err))
 		return gnet.None
 	}
 
-	c.handleMessage(&msg)
+	return gnet.None
+}
+
+// onTrafficData 处理接收到的数据，使用协议包解析
+func (c *TCPClient) onTrafficData(data []byte) error {
+	// 使用协议包处理接收到的数据
+	messages, err := c.msgBuffer.ProcessData(data)
+	if err != nil {
+		return fmt.Errorf("failed to process message data: %w", err)
+	}
+
+	// 处理解析出的所有消息
+	for _, msg := range messages {
+		c.handleMessage(msg)
+	}
 
 	c.statsMu.Lock()
-	c.stats.MessagesReceived++
 	c.stats.BytesReceived += int64(len(data))
+	c.stats.MessagesReceived += int64(len(messages))
 	c.stats.LastActivity = time.Now()
 	c.statsMu.Unlock()
 
-	return gnet.None
+	return nil
 }
 
 // OnTick gnet.EventHandler interface requirement
