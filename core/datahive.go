@@ -3,18 +3,19 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"github.com/riven-blade/datahive/pkg/protocol/pb"
-	"github.com/riven-blade/datahive/pkg/server"
-	"github.com/riven-blade/datahive/storage"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/riven-blade/datahive/pkg/protocol/pb"
+	"github.com/riven-blade/datahive/pkg/server"
+	"github.com/riven-blade/datahive/storage"
+
 	"github.com/riven-blade/datahive/config"
 	"github.com/riven-blade/datahive/pkg/ccxt"
+
 	_ "github.com/riven-blade/datahive/pkg/ccxt/binance" // Register Binance exchange
 	_ "github.com/riven-blade/datahive/pkg/ccxt/bybit"   // Register Bybit exchange
 	"github.com/riven-blade/datahive/pkg/logger"
@@ -414,17 +415,19 @@ func (d *DataHive) createExchangeClient(exchange, market string) (ccxt.Exchange,
 	logger.Ctx(ctx).Debug("支持的交易所列表",
 		zap.Strings("exchanges", supportedExchanges))
 
-	// 从配置中获取交易所配置
-	cfg, err := d.createExchangeConfig(exchange)
+	// 从配置中获取交易所配置，根据market类型创建正确的配置
+	cfg, err := d.createExchangeConfig(exchange, market)
 	if err != nil {
 		logger.Ctx(ctx).Error("创建交易所配置失败",
 			zap.String("exchange", exchange),
+			zap.String("market", market),
 			zap.Error(err))
 		return nil, err
 	}
 
 	logger.Ctx(ctx).Debug("调用ccxt.CreateExchange",
 		zap.String("exchange", exchange),
+		zap.String("market", market),
 		zap.Bool("enableWebSocket", cfg.(*ccxt.BaseConfig).EnableWebSocket))
 
 	client, err := ccxt.CreateExchange(exchange, cfg)
@@ -436,7 +439,8 @@ func (d *DataHive) createExchangeClient(exchange, market string) (ccxt.Exchange,
 	}
 
 	logger.Ctx(ctx).Debug("ccxt.CreateExchange成功",
-		zap.String("exchange", exchange))
+		zap.String("exchange", exchange),
+		zap.String("market", market))
 	return client, nil
 }
 
@@ -445,7 +449,7 @@ func (d *DataHive) getMinerKey(exchange, market string) string {
 }
 
 // createExchangeConfig 根据配置创建交易所配置
-func (d *DataHive) createExchangeConfig(exchange string) (ccxt.ExchangeConfig, error) {
+func (d *DataHive) createExchangeConfig(exchange string, market string) (ccxt.ExchangeConfig, error) {
 	// 检查配置中是否有该交易所
 	if d.config.Exchanges == nil {
 		return nil, fmt.Errorf("no exchange configurations found")
@@ -463,20 +467,42 @@ func (d *DataHive) createExchangeConfig(exchange string) (ccxt.ExchangeConfig, e
 	// 创建BaseConfig
 	cfg := ccxt.DefaultBaseConfig()
 
-	// 从YAML配置设置值
-	cfg.APIKey = exchangeConfig.APIKey
-	cfg.Secret = exchangeConfig.Secret
-	cfg.TestNet = exchangeConfig.TestNet
-	cfg.RateLimit = exchangeConfig.RateLimit
-	cfg.EnableWebSocket = exchangeConfig.EnableWebSocket // 这是关键！
-	cfg.WSMaxReconnect = exchangeConfig.WSMaxReconnect
+	// 使用setter方法设置配置值
+	cfg.SetAPIKey(exchangeConfig.APIKey)
+	cfg.SetSecret(exchangeConfig.Secret)
+	cfg.SetTestnet(exchangeConfig.TestNet)
+	cfg.SetRateLimit(exchangeConfig.RateLimit)
+	cfg.SetEnableRateLimit(exchangeConfig.EnableRateLimit)
+	cfg.SetEnableWebSocket(exchangeConfig.EnableWebSocket)
+	cfg.SetWSMaxReconnect(exchangeConfig.WSMaxReconnect)
 
-	if exchangeConfig.DefaultType != "" {
-		cfg.DefaultType = exchangeConfig.DefaultType
+	// 设置超时时间
+	if exchangeConfig.Timeout > 0 {
+		cfg.SetTimeout(time.Duration(exchangeConfig.Timeout) * time.Millisecond)
 	}
 
-	if exchangeConfig.Timeout > 0 {
-		cfg.Timeout = exchangeConfig.Timeout
+	switch exchange {
+	case "binance":
+		cfg.SetRecvWindow(5000) // Binance特有配置：接收窗口5秒
+	case "bybit":
+		cfg.SetRecvWindow(5000) // Bybit也使用类似配置
+	default:
+		cfg.SetRecvWindow(0) // 其他交易所不需要
+	}
+
+	switch market {
+	case "future", "futures":
+		cfg.SetMarketType("future")
+	case "spot":
+		cfg.SetMarketType("spot")
+	case "margin":
+		cfg.SetMarketType("margin")
+	default:
+		if exchangeConfig.DefaultType != "" {
+			cfg.SetMarketType(exchangeConfig.DefaultType)
+		} else {
+			cfg.SetMarketType(market) // 直接使用传入的market类型
+		}
 	}
 
 	return cfg, nil
@@ -543,5 +569,5 @@ func (d *DataHive) GetTopicSymbol(exchange, market, symbol string) (string, erro
 		return marketInfo.ID, nil
 	}
 
-	return symbol, errors.New(fmt.Sprintf("markets: %s, no such symbol.", symbol))
+	return symbol, fmt.Errorf("markets: %s, no such symbol", symbol)
 }

@@ -1175,7 +1175,7 @@ func (b *Binance) ParseMarkPrice(data map[string]interface{}, symbol string) *cc
 		EstimatedSettlePrice: b.SafeFloat(data, "P", 0),
 		FundingRate:          b.SafeFloat(data, "r", 0),
 		FundingTime:          b.SafeInt(data, "T", 0),
-		StreamName:           fmt.Sprintf("%s@markPrice", strings.ToLower(symbol)),
+		StreamName:           fmt.Sprintf("%s@mark_price", strings.ToLower(symbol)),
 	}
 }
 

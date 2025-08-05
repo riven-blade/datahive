@@ -50,7 +50,7 @@ func DefaultConfig() *Config {
 		Headers:         make(map[string]string),
 		Options:         make(map[string]interface{}),
 		DefaultType:     "linear", // Bybit主要是期货交易所
-		EnableWebSocket: false,
+		EnableWebSocket: true,
 		WSMaxReconnect:  3,
 		Category:        "linear",
 	}

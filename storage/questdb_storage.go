@@ -48,14 +48,16 @@ type BatchProcessor struct {
 	maxMemoryMB   int64 // 最大内存使用量(MB)
 
 	// 各类型数据批次
-	klineBatch  []*pb.Kline
-	tradeBatch  []*pb.Trade
-	tickerBatch []*pb.Ticker
+	klineBatch      []*pb.Kline
+	tradeBatch      []*pb.Trade
+	tickerBatch     []*pb.Ticker
+	miniTickerBatch []*pb.MiniTicker
 
 	// 互斥锁
-	klineMu  sync.Mutex
-	tradeMu  sync.Mutex
-	tickerMu sync.Mutex
+	klineMu      sync.Mutex
+	tradeMu      sync.Mutex
+	tickerMu     sync.Mutex
+	miniTickerMu sync.Mutex
 
 	// 内存使用统计
 	memoryUsage int64 // 当前内存使用量(bytes)
@@ -654,4 +656,126 @@ func (q *QuestDBStorage) DeleteExpiredData(ctx context.Context, beforeTime int64
 		zap.Duration("duration", time.Since(start)))
 
 	return nil
+}
+
+// SaveMiniTickers 保存MiniTicker数据
+func (q *QuestDBStorage) SaveMiniTickers(ctx context.Context, exchange string, miniTickers []*pb.MiniTicker) error {
+	if !q.IsHealthy() {
+		q.recordFailedOperation("storage not healthy")
+		return ErrStorageNotHealthy
+	}
+
+	if len(miniTickers) == 0 {
+		return nil
+	}
+
+	start := time.Now()
+
+	// 数据验证
+	validMiniTickers := make([]*pb.MiniTicker, 0, len(miniTickers))
+	for _, miniTicker := range miniTickers {
+		if err := q.typeConverter.ValidateMiniTickerData(miniTicker); err != nil {
+			logger.Ctx(ctx).Warn("Invalid mini ticker data",
+				zap.String("exchange", exchange),
+				zap.String("symbol", miniTicker.Symbol),
+				zap.Error(err))
+			continue
+		}
+		validMiniTickers = append(validMiniTickers, miniTicker)
+	}
+
+	if len(validMiniTickers) == 0 {
+		return ErrValidationError("no valid mini tickers to save")
+	}
+
+	// 添加到批量处理器
+	if err := q.batchProcessor.addMiniTickersWithExchange(exchange, validMiniTickers); err != nil {
+		q.recordFailedOperation("failed to add mini tickers to batch")
+		return ErrQueryError("failed to queue mini tickers for saving", err)
+	}
+
+	// 记录统计信息
+	q.recordSuccessfulOperation()
+	q.stats.mu.Lock()
+	q.stats.TickersSaved += int64(len(validMiniTickers)) // 使用TickersSaved统计
+	q.stats.AverageLatencyMs = q.updateAverageLatency(time.Since(start))
+	q.stats.mu.Unlock()
+
+	return nil
+}
+
+// QueryMiniTickers 查询MiniTicker数据
+func (q *QuestDBStorage) QueryMiniTickers(ctx context.Context, exchange, symbol string, start int64, limit int) ([]*pb.MiniTicker, error) {
+	if !q.IsHealthy() {
+		q.recordFailedOperation("storage not healthy")
+		return nil, ErrStorageNotHealthy
+	}
+
+	if exchange == "" || symbol == "" {
+		return nil, ErrInvalidQuery
+	}
+
+	if limit <= 0 {
+		limit = 1000
+	}
+	if limit > 10000 {
+		return nil, ErrInvalidData("limit too large, maximum is 10000")
+	}
+
+	queryStart := time.Now()
+	startTime := time.UnixMilli(start)
+
+	query := `
+		SELECT symbol, timestamp, open, high, low, close, volume, quote_volume
+		FROM mini_tickers 
+		WHERE exchange = $1 AND symbol = $2 AND timestamp >= $3 
+		ORDER BY timestamp ASC
+		LIMIT $4`
+
+	ctx, cancel := context.WithTimeout(ctx, q.config.QueryTimeout)
+	defer cancel()
+
+	rows, err := q.db.QueryContext(ctx, query, exchange, symbol, startTime, limit)
+	if err != nil {
+		q.recordFailedOperation("query failed")
+		return nil, ErrQueryError("failed to query mini tickers", err)
+	}
+	defer rows.Close()
+
+	var miniTickers []*pb.MiniTicker
+	for rows.Next() {
+		miniTicker := &pb.MiniTicker{}
+		if err := rows.Scan(
+			&miniTicker.Symbol,
+			&miniTicker.Timestamp,
+			&miniTicker.Open,
+			&miniTicker.High,
+			&miniTicker.Low,
+			&miniTicker.Close,
+			&miniTicker.Volume,
+			&miniTicker.QuoteVolume,
+		); err != nil {
+			logger.Ctx(ctx).Error("Failed to scan mini ticker row", zap.Error(err))
+			continue
+		}
+		miniTickers = append(miniTickers, miniTicker)
+	}
+
+	if err := rows.Err(); err != nil {
+		q.recordFailedOperation("row iteration failed")
+		return nil, ErrQueryError("error iterating mini ticker rows", err)
+	}
+
+	// 记录统计信息
+	queryDuration := time.Since(queryStart)
+	q.recordSuccessfulOperation()
+
+	q.stats.mu.Lock()
+	q.stats.AverageLatencyMs = q.updateAverageLatency(queryDuration)
+	if queryDuration.Milliseconds() > int64(q.stats.MaxLatencyMs) {
+		q.stats.MaxLatencyMs = float64(queryDuration.Milliseconds())
+	}
+	q.stats.mu.Unlock()
+
+	return miniTickers, nil
 }

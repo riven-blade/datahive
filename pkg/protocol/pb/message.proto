@@ -416,7 +416,7 @@ message MiniTickerUpdate {
 message MarkPriceUpdate {
   string topic = 1;               // 订阅topic
   MarkPrice mark_price = 2;       // 标记价格数据
-  string source_stream = 3;       // 源流名称 (如: @markPrice)
+  string source_stream = 3;       // 源流名称 (如: @mark_price)
 }
 
 // BookTickerUpdate 最优买卖价推送

@@ -46,3 +46,61 @@ const (
 	ErrCodeTimeout       = "TIMEOUT"
 	ErrCodeRateLimit     = "RATE_LIMIT"
 )
+
+// =============================================================================
+// WebSocket Stream Event Types
+// =============================================================================
+
+// Stream event type constants for WebSocket subscriptions
+const (
+	StreamEventKline      = "kline"       // K线数据流
+	StreamEventTrade      = "trade"       // 交易数据流
+	StreamEventOrderBook  = "order_book"  // 订单簿数据流
+	StreamEventMiniTicker = "mini_ticker" // 轻量级ticker数据流
+	StreamEventBookTicker = "book_ticker" // 最优买卖价数据流
+	StreamEventMarkPrice  = "mark_price"  // 标记价格数据流
+	StreamEventBalance    = "balance"     // 账户余额数据流
+	StreamEventOrders     = "orders"      // 订单数据流
+)
+
+// All supported stream event types for iteration
+var AllStreamEventTypes = []string{
+	StreamEventKline,
+	StreamEventTrade,
+	StreamEventOrderBook,
+	StreamEventMiniTicker,
+	StreamEventBookTicker,
+	StreamEventMarkPrice,
+	StreamEventBalance,
+	StreamEventOrders,
+}
+
+// IsValidStreamEvent 检查事件类型是否有效
+func IsValidStreamEvent(eventType string) bool {
+	for _, validType := range AllStreamEventTypes {
+		if validType == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+// GetMarketDataStreamEvents 获取所有市场数据流事件类型（排除账户相关）
+func GetMarketDataStreamEvents() []string {
+	return []string{
+		StreamEventKline,
+		StreamEventTrade,
+		StreamEventOrderBook,
+		StreamEventMiniTicker,
+		StreamEventBookTicker,
+		StreamEventMarkPrice,
+	}
+}
+
+// GetAccountStreamEvents 获取所有账户相关流事件类型
+func GetAccountStreamEvents() []string {
+	return []string{
+		StreamEventBalance,
+		StreamEventOrders,
+	}
+}

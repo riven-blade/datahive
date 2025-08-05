@@ -47,7 +47,7 @@ func DefaultConfig() *Config {
 		Headers:         make(map[string]string),
 		Options:         make(map[string]interface{}),
 		MarketType:      "spot",
-		EnableWebSocket: false,
+		EnableWebSocket: true,
 		WSMaxReconnect:  3,
 	}
 }

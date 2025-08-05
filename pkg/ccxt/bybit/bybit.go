@@ -29,20 +29,9 @@ func init() {
 			Headers:         config.GetHeaders(),
 			Options:         config.GetOptions(),
 			DefaultType:     config.GetMarketType(),
-			WSMaxReconnect:  5,    // 默认值
-			RecvWindow:      5000, // 默认值
-		}
-
-		// 从BaseConfig获取DefaultType和EnableWebSocket
-		if baseConfig, ok := config.(*ccxt.BaseConfig); ok {
-			bybitConfig.DefaultType = baseConfig.DefaultType
-			bybitConfig.EnableWebSocket = baseConfig.EnableWebSocket
-			bybitConfig.WSMaxReconnect = baseConfig.WSMaxReconnect
-			bybitConfig.RecvWindow = baseConfig.RecvWindow
-		} else {
-			// 非BaseConfig的兜底默认值
-			bybitConfig.DefaultType = "linear"
-			bybitConfig.EnableWebSocket = false
+			EnableWebSocket: config.GetEnableWebSocket(),
+			WSMaxReconnect:  config.GetWSMaxReconnect(),
+			RecvWindow:      config.GetRecvWindow(),
 		}
 
 		return New(bybitConfig)
@@ -1870,11 +1859,6 @@ func (b *Bybit) PrivateAPI(ctx context.Context, method, endpoint string, params 
 
 // ========== WebSocket Watch 方法 ==========
 
-// WatchPrice 观察单个交易对的价格
-func (b *Bybit) WatchPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchPrice, error) {
-	return "", nil, ccxt.NewNotSupported("WatchPrice not implemented for Bybit yet")
-}
-
 // WatchOHLCV 观察K线数据
 func (b *Bybit) WatchOHLCV(ctx context.Context, symbol, timeframe string, params map[string]interface{}) (string, <-chan *ccxt.WatchOHLCV, error) {
 	return "", nil, ccxt.NewNotSupported("WatchOHLCV not implemented for Bybit yet")
@@ -1898,6 +1882,11 @@ func (b *Bybit) WatchBalance(ctx context.Context, params map[string]interface{})
 // WatchOrders 观察订单状态
 func (b *Bybit) WatchOrders(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchOrder, error) {
 	return "", nil, ccxt.NewNotSupported("WatchOrders not implemented for Bybit yet")
+}
+
+// WatchMarkPrice 观察标记价格数据(仅期货)
+func (b *Bybit) WatchMarkPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMarkPrice, error) {
+	return "", nil, ccxt.NewNotSupported("WatchMarkPrice not implemented for Bybit yet")
 }
 
 // GenerateChannel 生成 Bybit 特定的 WebSocket channel 名称

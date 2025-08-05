@@ -16,9 +16,10 @@ import (
 
 // 估算数据结构的内存大小
 const (
-	klineSize  = int64(unsafe.Sizeof(pb.Kline{}))
-	tradeSize  = int64(unsafe.Sizeof(pb.Trade{}))
-	tickerSize = int64(unsafe.Sizeof(pb.Ticker{}))
+	klineSize      = int64(unsafe.Sizeof(pb.Kline{}))
+	tradeSize      = int64(unsafe.Sizeof(pb.Trade{}))
+	tickerSize     = int64(unsafe.Sizeof(pb.Ticker{}))
+	miniTickerSize = int64(unsafe.Sizeof(pb.MiniTicker{}))
 )
 
 // start 启动批量处理器
@@ -135,11 +136,38 @@ func (bp *BatchProcessor) addTickersWithExchange(exchange string, tickers []*pb.
 	return nil
 }
 
+// addMiniTickers 添加MiniTicker数据到批次
+func (bp *BatchProcessor) addMiniTickers(miniTickers []*pb.MiniTicker) error {
+	return bp.addMiniTickersWithExchange("", miniTickers)
+}
+
+// addMiniTickersWithExchange 添加MiniTicker数据到批次（指定交易所）
+func (bp *BatchProcessor) addMiniTickersWithExchange(exchange string, miniTickers []*pb.MiniTicker) error {
+	bp.miniTickerMu.Lock()
+	defer bp.miniTickerMu.Unlock()
+
+	if len(bp.miniTickerBatch)+len(miniTickers) > bp.maxBatchSize {
+		go bp.flushMiniTickersWithExchange(exchange)
+	}
+
+	bp.miniTickerBatch = append(bp.miniTickerBatch, miniTickers...)
+
+	memoryIncrease := int64(len(miniTickers)) * miniTickerSize
+	atomic.AddInt64(&bp.memoryUsage, memoryIncrease)
+
+	if atomic.LoadInt64(&bp.memoryUsage) > bp.maxMemoryMB*1024*1024 {
+		go bp.flushMiniTickersWithExchange(exchange)
+	}
+
+	return nil
+}
+
 // flush 刷新所有批次
 func (bp *BatchProcessor) flush() {
 	bp.flushKlines()
 	bp.flushTrades()
 	bp.flushTickers()
+	bp.flushMiniTickers()
 }
 
 // checkMemoryUsage 检查内存使用情况
@@ -256,6 +284,43 @@ func (bp *BatchProcessor) flushTickersWithExchange(exchange string) {
 	}
 
 	logger.Ctx(ctx).Debug("批量价格数据已保存",
+		zap.Int("count", len(batch)),
+		zap.Duration("duration", time.Since(start)))
+}
+
+// flushMiniTickers 刷新MiniTicker数据批次
+func (bp *BatchProcessor) flushMiniTickers() {
+	bp.flushMiniTickersWithExchange("")
+}
+
+// flushMiniTickersWithExchange 刷新MiniTicker数据批次（指定交易所）
+func (bp *BatchProcessor) flushMiniTickersWithExchange(exchange string) {
+	bp.miniTickerMu.Lock()
+	if len(bp.miniTickerBatch) == 0 {
+		bp.miniTickerMu.Unlock()
+		return
+	}
+
+	batch := bp.miniTickerBatch
+	bp.miniTickerBatch = make([]*pb.MiniTicker, 0, bp.maxBatchSize)
+	bp.miniTickerMu.Unlock()
+
+	memoryDecrease := int64(len(batch)) * miniTickerSize
+	atomic.AddInt64(&bp.memoryUsage, -memoryDecrease)
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), bp.storage.config.QueryTimeout)
+	defer cancel()
+
+	if err := bp.saveMiniTickersBatchWithExchange(ctx, exchange, batch); err != nil {
+		bp.storage.recordFailedOperation("batch mini tickers save failed")
+		logger.Ctx(ctx).Error("批量保存MiniTicker数据失败",
+			zap.Error(err),
+			zap.Int("count", len(batch)))
+		return
+	}
+
+	logger.Ctx(ctx).Debug("批量MiniTicker数据已保存",
 		zap.Int("count", len(batch)),
 		zap.Duration("duration", time.Since(start)))
 }
@@ -410,6 +475,44 @@ func (bp *BatchProcessor) saveTickersBatchWithExchange(ctx context.Context, exch
 	_, err := bp.storage.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return ErrQueryError(fmt.Sprintf("failed to batch insert %d tickers", len(tickers)), err)
+	}
+
+	return nil
+}
+
+// saveMiniTickersBatch 批量保存MiniTicker数据
+func (bp *BatchProcessor) saveMiniTickersBatch(ctx context.Context, miniTickers []*pb.MiniTicker) error {
+	return bp.saveMiniTickersBatchWithExchange(ctx, "", miniTickers)
+}
+
+// saveMiniTickersBatchWithExchange 批量保存MiniTicker数据（指定交易所）
+func (bp *BatchProcessor) saveMiniTickersBatchWithExchange(ctx context.Context, exchange string, miniTickers []*pb.MiniTicker) error {
+	if len(miniTickers) == 0 {
+		return nil
+	}
+
+	var values []string
+	var args []interface{}
+
+	for i, miniTicker := range miniTickers {
+		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+			i*9+1, i*9+2, i*9+3, i*9+4, i*9+5, i*9+6, i*9+7, i*9+8, i*9+9))
+
+		ts := time.UnixMilli(miniTicker.Timestamp)
+
+		args = append(args,
+			exchange, miniTicker.Symbol, ts,
+			miniTicker.Open, miniTicker.High, miniTicker.Low, miniTicker.Close,
+			miniTicker.Volume, miniTicker.QuoteVolume)
+	}
+
+	query := fmt.Sprintf(
+		"INSERT INTO mini_tickers (exchange, symbol, timestamp, open, high, low, close, volume, quote_volume) VALUES %s",
+		strings.Join(values, ", "))
+
+	_, err := bp.storage.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return ErrQueryError(fmt.Sprintf("failed to batch insert %d mini tickers", len(miniTickers)), err)
 	}
 
 	return nil

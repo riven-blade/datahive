@@ -52,7 +52,7 @@ func DefaultBaseConfig() *BaseConfig {
 		Headers:         make(map[string]string),
 		Options:         make(map[string]interface{}),
 		DefaultType:     "spot",
-		EnableWebSocket: false,
+		EnableWebSocket: true,
 		WSMaxReconnect:  5,
 		RecvWindow:      5000, // 5秒
 	}
@@ -74,6 +74,9 @@ func (c *BaseConfig) GetUserAgent() string               { return c.UserAgent }
 func (c *BaseConfig) GetMarketType() string              { return c.DefaultType }
 func (c *BaseConfig) GetHeaders() map[string]string      { return c.Headers }
 func (c *BaseConfig) GetOptions() map[string]interface{} { return c.Options }
+func (c *BaseConfig) GetEnableWebSocket() bool           { return c.EnableWebSocket }
+func (c *BaseConfig) GetWSMaxReconnect() int             { return c.WSMaxReconnect }
+func (c *BaseConfig) GetRecvWindow() int64               { return c.RecvWindow }
 
 func (c *BaseConfig) SetAPIKey(key string)                      { c.APIKey = key }
 func (c *BaseConfig) SetSecret(secret string)                   { c.Secret = secret }
@@ -85,7 +88,11 @@ func (c *BaseConfig) SetTimeout(timeout time.Duration)          { c.Timeout = in
 func (c *BaseConfig) SetRateLimit(limit int)                    { c.RateLimit = limit }
 func (c *BaseConfig) SetEnableRateLimit(enable bool)            { c.EnableRateLimit = enable }
 func (c *BaseConfig) SetProxy(proxy string)                     { c.Proxy = proxy }
+func (c *BaseConfig) SetEnableWebSocket(enable bool)            { c.EnableWebSocket = enable }
+func (c *BaseConfig) SetWSMaxReconnect(maxReconnect int)        { c.WSMaxReconnect = maxReconnect }
+func (c *BaseConfig) SetRecvWindow(recvWindow int64)            { c.RecvWindow = recvWindow }
 func (c *BaseConfig) SetUserAgent(userAgent string)             { c.UserAgent = userAgent }
+func (c *BaseConfig) SetMarketType(marketType string)           { c.DefaultType = marketType }
 func (c *BaseConfig) SetHeaders(headers map[string]string)      { c.Headers = headers }
 func (c *BaseConfig) SetOptions(options map[string]interface{}) { c.Options = options }
 

@@ -41,6 +41,9 @@ type Client interface {
 
 	// 状态获取
 	GetStats() *ClientStats
+
+	// 重连控制
+	StopAutoReconnect()
 }
 
 // ClientState 客户端状态
@@ -121,6 +124,11 @@ type TCPClient struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	// 重连管理
+	reconnectTicker   *time.Ticker
+	reconnectAttempts int64
+	lastAddress       string
+
 	// 统计信息
 	stats   *ClientStats
 	statsMu sync.RWMutex
@@ -169,6 +177,8 @@ func (c *TCPClient) Connect(address string) error {
 	}
 
 	c.address = address
+	c.lastAddress = address
+	atomic.StoreInt64(&c.reconnectAttempts, 0) // 重置重连计数器
 	c.logger.Info("Connecting to server", zap.String("address", address))
 
 	// 创建gnet客户端
@@ -410,13 +420,18 @@ func (c *TCPClient) OnClose(gc gnet.Conn, err error) gnet.Action {
 	if atomic.LoadInt32(&c.state) != int32(StateClosed) {
 		atomic.StoreInt32(&c.state, int32(StateDisconnected))
 
-		// 触发断开连接回调
-		c.callbackMu.RLock()
-		onDisconnected := c.onDisconnected
-		c.callbackMu.RUnlock()
+		// 启动自动重连（如果启用）
+		if c.config.EnableAutoReconnect && c.lastAddress != "" {
+			go c.startAutoReconnect(err)
+		} else {
+			// 触发断开连接回调
+			c.callbackMu.RLock()
+			onDisconnected := c.onDisconnected
+			c.callbackMu.RUnlock()
 
-		if onDisconnected != nil {
-			go onDisconnected(err)
+			if onDisconnected != nil {
+				go onDisconnected(err)
+			}
 		}
 	}
 
@@ -516,4 +531,125 @@ func (c *TCPClient) notifyError(err error) {
 	}
 
 	c.logger.Error("Client error", zap.Error(err))
+}
+
+// startAutoReconnect 启动自动重连
+func (c *TCPClient) startAutoReconnect(disconnectErr error) {
+	attempts := atomic.LoadInt64(&c.reconnectAttempts)
+	maxAttempts := int64(c.config.MaxReconnectAttempts)
+
+	// 检查是否超过最大重连次数
+	if maxAttempts > 0 && attempts >= maxAttempts {
+		c.logger.Error("Maximum reconnect attempts reached",
+			zap.Int64("attempts", attempts),
+			zap.Int("max_attempts", c.config.MaxReconnectAttempts))
+
+		// 触发断开连接回调
+		c.callbackMu.RLock()
+		onDisconnected := c.onDisconnected
+		c.callbackMu.RUnlock()
+
+		if onDisconnected != nil {
+			go onDisconnected(disconnectErr)
+		}
+		return
+	}
+
+	// 更新状态为重连中
+	if !atomic.CompareAndSwapInt32(&c.state, int32(StateDisconnected), int32(StateReconnecting)) {
+		return // 状态已改变，可能已经在重连或已连接
+	}
+
+	atomic.AddInt64(&c.reconnectAttempts, 1)
+	currentAttempts := atomic.LoadInt64(&c.reconnectAttempts)
+
+	c.logger.Info("Starting reconnection attempt",
+		zap.Int64("attempt", currentAttempts),
+		zap.Int("max_attempts", c.config.MaxReconnectAttempts),
+		zap.String("address", c.lastAddress))
+
+	// 等待重连间隔
+	time.Sleep(c.config.ReconnectInterval)
+
+	// 检查是否被取消
+	select {
+	case <-c.ctx.Done():
+		atomic.StoreInt32(&c.state, int32(StateDisconnected))
+		return
+	default:
+	}
+
+	// 尝试重连
+	if err := c.attemptReconnect(); err != nil {
+		c.logger.Warn("Reconnection attempt failed",
+			zap.Error(err),
+			zap.Int64("attempt", currentAttempts))
+
+		// 继续尝试重连
+		go c.startAutoReconnect(disconnectErr)
+	} else {
+		c.logger.Info("Successfully reconnected",
+			zap.Int64("attempts", currentAttempts),
+			zap.String("address", c.lastAddress))
+
+		// 重置重连计数器
+		atomic.StoreInt64(&c.reconnectAttempts, 0)
+
+		// 触发连接成功回调
+		c.callbackMu.RLock()
+		onConnected := c.onConnected
+		c.callbackMu.RUnlock()
+
+		if onConnected != nil {
+			go onConnected()
+		}
+	}
+}
+
+// attemptReconnect 尝试重新连接
+func (c *TCPClient) attemptReconnect() error {
+	// 清理旧的连接资源
+	if c.gnetClient != nil {
+		c.gnetClient.Stop()
+		c.gnetClient = nil
+	}
+
+	// 创建新的gnet客户端
+	gnetClient, err := gnet.NewClient(c)
+	if err != nil {
+		atomic.StoreInt32(&c.state, int32(StateDisconnected))
+		return fmt.Errorf("failed to create gnet client: %w", err)
+	}
+
+	c.gnetClient = gnetClient
+
+	// 启动客户端
+	err = c.gnetClient.Start()
+	if err != nil {
+		atomic.StoreInt32(&c.state, int32(StateDisconnected))
+		return fmt.Errorf("failed to start gnet client: %w", err)
+	}
+
+	// 连接到服务器
+	conn, err := c.gnetClient.Dial("tcp", c.lastAddress)
+	if err != nil {
+		atomic.StoreInt32(&c.state, int32(StateDisconnected))
+		c.gnetClient.Stop()
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+
+	c.conn = conn
+	atomic.StoreInt32(&c.state, int32(StateConnected))
+	c.logger.Info("Reconnected successfully", zap.String("address", c.lastAddress))
+
+	return nil
+}
+
+// StopAutoReconnect 停止自动重连
+func (c *TCPClient) StopAutoReconnect() {
+	c.config.EnableAutoReconnect = false
+	if c.reconnectTicker != nil {
+		c.reconnectTicker.Stop()
+		c.reconnectTicker = nil
+	}
 }

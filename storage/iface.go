@@ -23,6 +23,9 @@ type TimeSeriesStorage interface {
 	SaveTickers(ctx context.Context, exchange string, prices []*pb.Ticker) error
 	QueryTickers(ctx context.Context, exchange, symbol string, start int64, limit int) ([]*pb.Ticker, error)
 
+	SaveMiniTickers(ctx context.Context, exchange string, miniTickers []*pb.MiniTicker) error
+	QueryMiniTickers(ctx context.Context, exchange, symbol string, start int64, limit int) ([]*pb.MiniTicker, error)
+
 	DeleteExpiredData(ctx context.Context, beforeTime int64) error
 }
 

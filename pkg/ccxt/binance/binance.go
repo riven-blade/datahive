@@ -34,20 +34,9 @@ func init() {
 			Headers:         config.GetHeaders(),
 			Options:         config.GetOptions(),
 			MarketType:      config.GetMarketType(),
-			WSMaxReconnect:  5,    // 默认值
-			RecvWindow:      5000, // Binance特有配置
-		}
-
-		// 如果是BaseConfig，可以获取额外的字段
-		if baseConfig, ok := config.(*ccxt.BaseConfig); ok {
-			binanceConfig.MarketType = baseConfig.DefaultType
-			binanceConfig.EnableWebSocket = baseConfig.EnableWebSocket
-			binanceConfig.WSMaxReconnect = baseConfig.WSMaxReconnect
-			binanceConfig.RecvWindow = baseConfig.RecvWindow
-		} else {
-			// 非BaseConfig的兜底默认值
-			binanceConfig.MarketType = "spot"
-			binanceConfig.EnableWebSocket = false
+			EnableWebSocket: config.GetEnableWebSocket(),
+			WSMaxReconnect:  config.GetWSMaxReconnect(),
+			RecvWindow:      config.GetRecvWindow(),
 		}
 
 		return New(binanceConfig)
@@ -71,6 +60,9 @@ type Binance struct {
 	// WebSocket连接池 - 支持多实例管理
 	wsPool *WebSocketPool
 
+	// 速率限制器
+	rateLimiter *RateLimiter
+
 	// 缓存字段
 	lastServerTimeRequest int64
 	serverTimeOffset      int64
@@ -91,6 +83,7 @@ func New(config *Config) (*Binance, error) {
 		marketType:    config.MarketType,
 		endpoints:     make(map[string]string),
 		subscriptions: make(map[string]string),
+		rateLimiter:   NewRateLimiter(),
 	}
 
 	// 初始化WebSocket连接池
@@ -120,12 +113,6 @@ func New(config *Config) (*Binance, error) {
 	binance.SetFees()
 
 	return binance, nil
-}
-
-// GetSharedChannels 获取WebSocket的共享channels - 新架构不再需要
-// 这些方法保留为空实现以兼容接口，但不推荐使用
-func (b *Binance) GetPriceChannel() <-chan *ccxt.WatchPrice {
-	return nil
 }
 
 func (b *Binance) GetKlineChannel() <-chan *ccxt.WatchOHLCV {
@@ -296,7 +283,28 @@ func (b *Binance) SetEndpoints() {
 	baseURL := b.config.GetBaseURL()
 	futuresURL := b.config.GetFuturesURL()
 
+	// 根据市场类型设置正确的WebSocket URL
+	var wsURL string
+	if b.config.TestNet {
+		if b.marketType == "future" {
+			wsURL = "wss://fstream.binancefuture.com/ws"
+		} else {
+			wsURL = "wss://testnet.binance.vision/ws"
+		}
+	} else {
+		switch b.marketType {
+		case "future":
+			wsURL = "wss://fstream.binance.com/ws"
+		case "delivery":
+			wsURL = "wss://dstream.binance.com/ws"
+		default:
+			wsURL = "wss://stream.binance.com:9443/ws"
+		}
+	}
+
 	b.endpoints = map[string]string{
+		// WebSocket
+		"websocket": wsURL,
 		// 基础信息
 		"ping":         baseURL + "/api/v3/ping",
 		"time":         baseURL + "/api/v3/time",
@@ -484,7 +492,7 @@ func (b *Binance) LoadMarkets(ctx context.Context, reload ...bool) (map[string]*
 	var err error
 
 	switch b.marketType {
-	case "futures":
+	case "future":
 		markets, err = b.fetchFuturesMarkets(ctx)
 	default:
 		markets, err = b.fetchSpotMarkets(ctx)
@@ -555,7 +563,7 @@ func (b *Binance) fetchFuturesMarkets(ctx context.Context) (map[string]*ccxt.Mar
 // FetchMarkets 获取市场信息
 func (b *Binance) FetchMarkets(ctx context.Context, params map[string]interface{}) ([]*ccxt.Market, error) {
 	// 调用LoadMarkets获取所有市场
-	marketsMap, err := b.LoadMarkets(ctx, false)
+	marketsMap, err := b.LoadMarkets(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -2058,23 +2066,31 @@ func (b *Binance) CheckRateLimit(ctx context.Context, cost int) error {
 		return nil
 	}
 
-	// Binance 限流：1200 requests per minute (20 requests per second)
-	rateLimit := 1200 // 默认限流
-
-	// 计算需要等待的时间
-	interval := time.Duration(60*1000/rateLimit) * time.Millisecond
-	waitTime := time.Duration(cost) * interval
-
-	if waitTime > 0 {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(waitTime):
-			return nil
+	// 使用令牌桶算法进行速率限制
+	// 优先尝试非阻塞获取，如果失败则等待
+	if !b.rateLimiter.Allow(cost) {
+		// 需要等待，使用阻塞方式
+		if err := b.rateLimiter.Wait(ctx, cost); err != nil {
+			return ccxt.NewRateLimitExceeded("Binance rate limit exceeded", 60)
 		}
 	}
 
 	return nil
+}
+
+// GetRateLimiterStatus 获取速率限制器状态（用于监控和调试）
+func (b *Binance) GetRateLimiterStatus() map[string]interface{} {
+	if b.rateLimiter == nil {
+		return map[string]interface{}{
+			"enabled": false,
+			"message": "Rate limiter not initialized",
+		}
+	}
+
+	status := b.rateLimiter.GetStatus()
+	status["enabled"] = b.config.EnableRateLimit
+	status["exchange"] = "binance"
+	return status
 }
 
 // HandleNetworkError 处理网络错误
@@ -3947,15 +3963,6 @@ func (b *Binance) extractPath(fullURL string) string {
 }
 
 // ========== WebSocket 方法委托 ==========
-
-// WatchPrice 观察单个交易对的价格
-func (b *Binance) WatchPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchPrice, error) {
-	if b.wsPool == nil {
-		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
-	}
-
-	return b.wsPool.WatchPrice(ctx, symbol, params)
-}
 
 // WatchOrderBook 观察订单簿
 func (b *Binance) WatchOrderBook(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchOrderBook, error) {

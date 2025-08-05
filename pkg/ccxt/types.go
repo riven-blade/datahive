@@ -334,21 +334,6 @@ type MarginMode struct {
 type MarginModeInfo = MarginMode
 
 // ========== WebSocket 相关类型 ==========
-
-// WatchPrice WebSocket 价格数据
-type WatchPrice struct {
-	Price      float64 `json:"price"`       // 价格
-	Symbol     string  `json:"symbol"`      // 交易对
-	TimeStamp  int64   `json:"timestamp"`   // 时间戳
-	StreamName string  `json:"stream_name"` // 频道信息
-}
-
-// WatchTicker WebSocket Ticker 数据 (向后兼容)
-type WatchTicker struct {
-	Ticker
-	StreamName string `json:"stream_name"` // 频道信息
-}
-
 // WatchMiniTicker WebSocket 轻量级Ticker 数据
 type WatchMiniTicker struct {
 	Symbol      string  `json:"symbol"`       // 交易对符号

@@ -971,8 +971,12 @@ func (b *BaseExchange) FetchFundingHistory(ctx context.Context, symbol string, s
 }
 
 // WebSocket方法的默认实现
-func (b *BaseExchange) WatchPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchPrice, error) {
-	return "", nil, NewNotSupported("WatchPrice")
+func (b *BaseExchange) WatchMiniTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchMiniTicker, error) {
+	return "", nil, NewNotSupported("WatchMiniTicker")
+}
+
+func (b *BaseExchange) WatchBookTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchBookTicker, error) {
+	return "", nil, NewNotSupported("WatchBookTicker")
 }
 
 func (b *BaseExchange) WatchOrderBook(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchOrderBook, error) {
@@ -985,6 +989,10 @@ func (b *BaseExchange) WatchTrade(ctx context.Context, symbol string, params map
 
 func (b *BaseExchange) WatchOHLCV(ctx context.Context, symbol, timeframe string, params map[string]interface{}) (string, <-chan *WatchOHLCV, error) {
 	return "", nil, NewNotSupported("WatchOHLCV")
+}
+
+func (b *BaseExchange) WatchMarkPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchMarkPrice, error) {
+	return "", nil, NewNotSupported("WatchMarkPrice")
 }
 
 func (b *BaseExchange) WatchBalance(ctx context.Context, params map[string]interface{}) (string, <-chan *WatchBalance, error) {

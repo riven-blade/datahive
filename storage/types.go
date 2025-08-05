@@ -37,6 +37,24 @@ func (tc *TypeConverter) CCXTTickerToProtocol(exchange string, ticker *ccxt.Tick
 	}
 }
 
+// CCXTMiniTickerToProtocol 将CCXT MiniTicker转换为Protocol MiniTicker
+func (tc *TypeConverter) CCXTMiniTickerToProtocol(exchange string, miniTicker *ccxt.WatchMiniTicker) *pb.MiniTicker {
+	if miniTicker == nil {
+		return nil
+	}
+
+	return &pb.MiniTicker{
+		Symbol:      miniTicker.Symbol,
+		Timestamp:   miniTicker.TimeStamp,
+		Open:        miniTicker.Open,
+		High:        miniTicker.High,
+		Low:         miniTicker.Low,
+		Close:       miniTicker.Close,
+		Volume:      miniTicker.Volume,
+		QuoteVolume: miniTicker.QuoteVolume,
+	}
+}
+
 // ProtocolTickerToCCXT 将Protocol Ticker转换为CCXT Ticker
 func (tc *TypeConverter) ProtocolTickerToCCXT(ticker *pb.Ticker) *ccxt.Ticker {
 	if ticker == nil {
@@ -208,6 +226,21 @@ func (tc *TypeConverter) BatchConvertCCXTTickers(exchange string, tickers []*ccx
 	return result
 }
 
+// BatchConvertCCXTMiniTickers 批量转换CCXT MiniTicker
+func (tc *TypeConverter) BatchConvertCCXTMiniTickers(exchange string, miniTickers []*ccxt.WatchMiniTicker) []*pb.MiniTicker {
+	if len(miniTickers) == 0 {
+		return nil
+	}
+
+	result := make([]*pb.MiniTicker, 0, len(miniTickers))
+	for _, miniTicker := range miniTickers {
+		if converted := tc.CCXTMiniTickerToProtocol(exchange, miniTicker); converted != nil {
+			result = append(result, converted)
+		}
+	}
+	return result
+}
+
 // BatchConvertCCXTOHLCVs 批量转换CCXT OHLCV
 func (tc *TypeConverter) BatchConvertCCXTOHLCVs(exchange, symbol, timeframe string, ohlcvs []*ccxt.OHLCV) []*pb.Kline {
 	if len(ohlcvs) == 0 {
@@ -254,6 +287,26 @@ func (tc *TypeConverter) ValidateTickerData(ticker *pb.Ticker) error {
 	}
 	if ticker.Volume < 0 {
 		return ErrInvalidData("ticker volume is negative")
+	}
+	return nil
+}
+
+// ValidateMiniTickerData 验证MiniTicker数据的有效性
+func (tc *TypeConverter) ValidateMiniTickerData(miniTicker *pb.MiniTicker) error {
+	if miniTicker == nil {
+		return ErrInvalidData("mini ticker is nil")
+	}
+	if miniTicker.Symbol == "" {
+		return ErrInvalidData("mini ticker symbol is empty")
+	}
+	if miniTicker.Timestamp <= 0 {
+		return ErrInvalidData("mini ticker timestamp is invalid")
+	}
+	if miniTicker.Open < 0 || miniTicker.High < 0 || miniTicker.Low < 0 || miniTicker.Close < 0 {
+		return ErrInvalidData("mini ticker contains negative prices")
+	}
+	if miniTicker.Volume < 0 || miniTicker.QuoteVolume < 0 {
+		return ErrInvalidData("mini ticker volume is negative")
 	}
 	return nil
 }

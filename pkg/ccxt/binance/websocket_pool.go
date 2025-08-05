@@ -161,33 +161,6 @@ func (p *WebSocketPool) getInstanceForSymbol(symbol string) (*PooledWebSocket, e
 	return nil, fmt.Errorf("failed to create instance")
 }
 
-// WatchPrice 订阅价格数据 - 返回订阅ID和专用频道
-func (p *WebSocketPool) WatchPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchPrice, error) {
-	instance, err := p.getInstanceForSymbol(symbol)
-	if err != nil {
-		return "", nil, err
-	}
-
-	// 连接实例（如果尚未连接）
-	if !instance.IsConnected() {
-		if err := instance.Connect(ctx); err != nil {
-			return "", nil, fmt.Errorf("failed to connect instance %d: %w", instance.id, err)
-		}
-	}
-
-	// 调用实例的WatchPrice
-	subscriptionID, resultChan, err := instance.WatchPrice(ctx, symbol, params)
-	if err != nil {
-		return "", nil, err
-	}
-
-	// 增加订阅计数
-	atomic.AddInt32(&instance.subscriptions, 1)
-
-	// 返回订阅ID和专用频道
-	return subscriptionID, resultChan, nil
-}
-
 // WatchOHLCV 订阅K线数据 - 返回订阅ID和专用频道
 func (p *WebSocketPool) WatchOHLCV(ctx context.Context, symbol, timeframe string, params map[string]interface{}) (string, <-chan *ccxt.WatchOHLCV, error) {
 	instance, err := p.getInstanceForSymbol(symbol)

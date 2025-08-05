@@ -75,6 +75,7 @@ type ExchangeConfig struct {
 	Secret          string `yaml:"secret" json:"secret"`                   // API密钥秘密
 	TestNet         bool   `yaml:"testnet" json:"testnet"`                 // 是否使用测试网
 	RateLimit       int    `yaml:"rateLimit" json:"rateLimit"`             // 限流速率
+	EnableRateLimit bool   `yaml:"enableRateLimit" json:"enableRateLimit"` // 是否启用速率限制
 	EnableWebSocket bool   `yaml:"enableWebSocket" json:"enableWebSocket"` // 是否启用WebSocket
 	WSMaxReconnect  int    `yaml:"wsMaxReconnect" json:"wsMaxReconnect"`   // WebSocket最大重连次数
 	DefaultType     string `yaml:"defaultType" json:"defaultType"`         // 默认市场类型
@@ -95,7 +96,8 @@ func DefaultConfig() *Config {
 		Exchanges: map[string]*ExchangeConfig{
 			"binance": {
 				Enabled:         true,
-				EnableWebSocket: false,
+				EnableRateLimit: true, // 启用令牌桶速率限制算法
+				EnableWebSocket: true, // 启用WebSocket以支持所有数据类型的实时订阅
 				WSMaxReconnect:  5,
 				Timeout:         30000,
 				RateLimit:       1200,

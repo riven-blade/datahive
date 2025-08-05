@@ -10,6 +10,7 @@ import (
 
 	"github.com/riven-blade/datahive/pkg/ccxt"
 	"github.com/riven-blade/datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/protocol"
 	"github.com/riven-blade/datahive/pkg/utils"
 
 	"github.com/spf13/cast"
@@ -126,9 +127,15 @@ func (ws *BinanceWebSocket) IsConnected() bool {
 
 // getWebSocketURL 获取WebSocket URL
 func (ws *BinanceWebSocket) getWebSocketURL() string {
+	// 优先使用统一的端点配置
+	if wsURL, exists := ws.exchange.endpoints["websocket"]; exists && wsURL != "" {
+		return wsURL
+	}
+
+	// 降级到硬编码逻辑（兼容性）
 	// 测试网络
 	if ws.exchange.config.TestNet {
-		if ws.exchange.marketType == "futures" {
+		if ws.exchange.marketType == "future" || ws.exchange.marketType == "futures" {
 			return "wss://fstream.binancefuture.com/ws"
 		}
 		return "wss://testnet.binance.vision/ws"
@@ -136,7 +143,7 @@ func (ws *BinanceWebSocket) getWebSocketURL() string {
 
 	// 生产环境
 	switch ws.exchange.marketType {
-	case "futures":
+	case "future", "futures":
 		return "wss://fstream.binance.com/ws" // USDM期货
 	case "delivery":
 		return "wss://dstream.binance.com/ws" // COINM期货
@@ -349,6 +356,14 @@ func (ws *BinanceWebSocket) handleMessage(data []byte) error {
 		return fmt.Errorf("websocket error: %v", errorMsg)
 	}
 
+	// 添加调试信息来分析消息格式
+	if eventType, ok := msg["e"].(string); ok {
+		fmt.Printf("🔍 Message event type: %s\n", eventType)
+	}
+	if stream, ok := msg["stream"].(string); ok {
+		fmt.Printf("🔍 Message stream: %s\n", stream)
+	}
+
 	// 路由到流管理器进行分发
 	if ws.streamManager != nil {
 		fmt.Printf("📡 Routing message to stream manager\n")
@@ -356,23 +371,6 @@ func (ws *BinanceWebSocket) handleMessage(data []byte) error {
 	}
 
 	return nil
-}
-
-func (ws *BinanceWebSocket) WatchPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchPrice, error) {
-	streamName := cast.ToString(params["stream_name"])
-
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "ticker")
-	if err != nil {
-		return "", nil, err
-	}
-
-	if err := ws.subscribe(streamName); err != nil {
-		ws.streamManager.Unsubscribe(subscriptionID)
-		return "", nil, err
-	}
-
-	priceChan := userChan.(chan *ccxt.WatchPrice)
-	return subscriptionID, (<-chan *ccxt.WatchPrice)(priceChan), nil
 }
 
 // WatchOrderBook 订阅订单簿数据 - 返回专用channel和订阅ID
@@ -398,7 +396,7 @@ func (ws *BinanceWebSocket) WatchOrderBook(ctx context.Context, symbol string, p
 func (ws *BinanceWebSocket) WatchTrades(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchTrade, error) {
 	streamName := cast.ToString(params["stream_name"])
 
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "trade")
+	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, protocol.StreamEventTrade)
 	if err != nil {
 		return "", nil, err
 	}
@@ -417,7 +415,7 @@ func (ws *BinanceWebSocket) WatchTrades(ctx context.Context, symbol string, para
 func (ws *BinanceWebSocket) WatchOHLCV(ctx context.Context, symbol, timeframe string, params map[string]interface{}) (string, <-chan *ccxt.WatchOHLCV, error) {
 	streamName := cast.ToString(params["stream_name"])
 
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "kline")
+	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, protocol.StreamEventKline)
 	if err != nil {
 		return "", nil, err
 	}
@@ -638,7 +636,7 @@ func (ws *BinanceWebSocket) WatchMiniTicker(ctx context.Context, symbol string, 
 		streamName = stream
 	}
 
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "miniTicker")
+	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, protocol.StreamEventMiniTicker)
 	if err != nil {
 		return "", nil, err
 	}
@@ -654,13 +652,13 @@ func (ws *BinanceWebSocket) WatchMiniTicker(ctx context.Context, symbol string, 
 
 // WatchMarkPrice 监听标记价格数据(仅期货)
 func (ws *BinanceWebSocket) WatchMarkPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMarkPrice, error) {
-	streamName := fmt.Sprintf("%s@markPrice", strings.ToLower(symbol))
+	streamName := fmt.Sprintf("%s@mark_price", strings.ToLower(symbol))
 
 	if stream, ok := params["stream_name"].(string); ok {
 		streamName = stream
 	}
 
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "markPrice")
+	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "mark_price")
 	if err != nil {
 		return "", nil, err
 	}
@@ -682,7 +680,7 @@ func (ws *BinanceWebSocket) WatchBookTicker(ctx context.Context, symbol string, 
 		streamName = stream
 	}
 
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "bookTicker")
+	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, protocol.StreamEventBookTicker)
 	if err != nil {
 		return "", nil, err
 	}

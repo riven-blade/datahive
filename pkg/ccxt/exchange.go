@@ -49,10 +49,12 @@ type Exchange interface {
 	SetLeverage(ctx context.Context, leverage int, symbol string, params map[string]interface{}) (*LeverageInfo, error)
 	SetMarginMode(ctx context.Context, marginMode, symbol string, params map[string]interface{}) (*MarginMode, error)
 
-	WatchPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchPrice, error)
+	WatchMiniTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchMiniTicker, error)
+	WatchBookTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchBookTicker, error)
 	WatchOHLCV(ctx context.Context, symbol, timeframe string, params map[string]interface{}) (string, <-chan *WatchOHLCV, error)
 	WatchTrade(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchTrade, error)
 	WatchOrderBook(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchOrderBook, error)
+	WatchMarkPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchMarkPrice, error)
 	WatchBalance(ctx context.Context, params map[string]interface{}) (string, <-chan *WatchBalance, error)
 	WatchOrders(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *WatchOrder, error)
 
@@ -78,6 +80,11 @@ type ExchangeConfig interface {
 	GetHeaders() map[string]string
 	GetOptions() map[string]interface{}
 
+	// WebSocket 和 Binance 特有配置
+	GetEnableWebSocket() bool
+	GetWSMaxReconnect() int
+	GetRecvWindow() int64
+
 	SetAPIKey(string)
 	SetSecret(string)
 	SetPassword(string)
@@ -91,6 +98,10 @@ type ExchangeConfig interface {
 	SetUserAgent(string)
 	SetHeaders(map[string]string)
 	SetOptions(map[string]interface{})
+	SetMarketType(string)
+	SetEnableWebSocket(bool)
+	SetWSMaxReconnect(int)
+	SetRecvWindow(int64)
 }
 
 // DefaultExchangeConfig 默认配置实现
@@ -109,6 +120,9 @@ type DefaultExchangeConfig struct {
 	marketType      string
 	headers         map[string]string
 	options         map[string]interface{}
+	enableWebSocket bool
+	wsMaxReconnect  int
+	recvWindow      int64
 }
 
 // NewDefaultExchangeConfig 创建默认配置
@@ -121,6 +135,9 @@ func NewDefaultExchangeConfig() *DefaultExchangeConfig {
 		marketType:      "spot",
 		headers:         make(map[string]string),
 		options:         make(map[string]interface{}),
+		enableWebSocket: true,
+		wsMaxReconnect:  5,
+		recvWindow:      5000,
 	}
 }
 
@@ -139,6 +156,9 @@ func (c *DefaultExchangeConfig) GetUserAgent() string               { return c.u
 func (c *DefaultExchangeConfig) GetMarketType() string              { return c.marketType }
 func (c *DefaultExchangeConfig) GetHeaders() map[string]string      { return c.headers }
 func (c *DefaultExchangeConfig) GetOptions() map[string]interface{} { return c.options }
+func (c *DefaultExchangeConfig) GetEnableWebSocket() bool           { return c.enableWebSocket }
+func (c *DefaultExchangeConfig) GetWSMaxReconnect() int             { return c.wsMaxReconnect }
+func (c *DefaultExchangeConfig) GetRecvWindow() int64               { return c.recvWindow }
 
 // Setter 方法
 func (c *DefaultExchangeConfig) SetAPIKey(v string)                  { c.apiKey = v }
@@ -154,6 +174,10 @@ func (c *DefaultExchangeConfig) SetProxy(v string)                   { c.proxy =
 func (c *DefaultExchangeConfig) SetUserAgent(v string)               { c.userAgent = v }
 func (c *DefaultExchangeConfig) SetHeaders(v map[string]string)      { c.headers = v }
 func (c *DefaultExchangeConfig) SetOptions(v map[string]interface{}) { c.options = v }
+func (c *DefaultExchangeConfig) SetMarketType(v string)              { c.marketType = v }
+func (c *DefaultExchangeConfig) SetEnableWebSocket(v bool)           { c.enableWebSocket = v }
+func (c *DefaultExchangeConfig) SetWSMaxReconnect(v int)             { c.wsMaxReconnect = v }
+func (c *DefaultExchangeConfig) SetRecvWindow(v int64)               { c.recvWindow = v }
 
 // ========== 工厂接口 ==========
 

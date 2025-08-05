@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/riven-blade/datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/protocol"
 	"github.com/riven-blade/datahive/pkg/protocol/pb"
 
 	"go.uber.org/zap"
@@ -29,11 +31,9 @@ type DataHiveClient interface {
 	FetchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (*pb.OrderBook, error)
 
 	// 实时订阅 (WebSocket)
-	WatchPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.PriceUpdate, string, error)
 	WatchMiniTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.MiniTickerUpdate, string, error)
 	WatchMarkPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.MarkPriceUpdate, string, error)
 	WatchBookTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.BookTickerUpdate, string, error)
-	WatchFullTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.FullTickerUpdate, string, error)
 	WatchKline(ctx context.Context, exchange, marketType, symbol, timeframe string) (<-chan *pb.KlineUpdate, string, error)
 	WatchTrades(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.TradeUpdate, string, error)
 	WatchOrderBook(ctx context.Context, exchange, marketType, symbol string, limit int32) (<-chan *pb.OrderBookUpdate, string, error)
@@ -42,28 +42,101 @@ type DataHiveClient interface {
 	// 状态和错误处理
 	SetErrorHandler(handler func(error))
 	GetStats() *ClientStats
+	GetSubscriptions() map[string]map[string]interface{}
+	GetSubscriptionStats() map[string]interface{}
+}
+
+// SubscriptionState 订阅状态
+type SubscriptionState int32
+
+const (
+	SubscriptionPending SubscriptionState = iota
+	SubscriptionActive
+	SubscriptionClosed
+	SubscriptionError
+)
+
+func (s SubscriptionState) String() string {
+	switch s {
+	case SubscriptionPending:
+		return "pending"
+	case SubscriptionActive:
+		return "active"
+	case SubscriptionClosed:
+		return "closed"
+	case SubscriptionError:
+		return "error"
+	default:
+		return "unknown"
+	}
 }
 
 // subscription 订阅信息
 type subscription struct {
 	ID       string
-	Type     string // price, miniTicker, markPrice, bookTicker, fullTicker, kline, trades, orderbook
+	Type     string // miniTicker, mark_price, bookTicker, kline, trades, orderbook
 	Exchange string
 	Symbol   string
 
+	// 状态管理
+	state     int32 // SubscriptionState
+	createdAt time.Time
+	lastData  time.Time
+	dataCount int64
+
 	// Channels
-	PriceCh      chan *pb.PriceUpdate
 	MiniTickerCh chan *pb.MiniTickerUpdate
 	MarkPriceCh  chan *pb.MarkPriceUpdate
 	BookTickerCh chan *pb.BookTickerUpdate
-	FullTickerCh chan *pb.FullTickerUpdate
 	KlineCh      chan *pb.KlineUpdate
 	TradesCh     chan *pb.TradeUpdate
 	OrderBookCh  chan *pb.OrderBookUpdate
 
 	// 生命周期
+	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
+	mu     sync.RWMutex
+}
+
+// GetState 获取订阅状态
+func (s *subscription) GetState() SubscriptionState {
+	return SubscriptionState(atomic.LoadInt32(&s.state))
+}
+
+// SetState 设置订阅状态
+func (s *subscription) SetState(state SubscriptionState) {
+	atomic.StoreInt32(&s.state, int32(state))
+}
+
+// UpdateLastData 更新最后数据接收时间
+func (s *subscription) UpdateLastData() {
+	s.mu.Lock()
+	s.lastData = time.Now()
+	s.dataCount++
+	s.mu.Unlock()
+}
+
+// GetStats 获取订阅统计信息
+func (s *subscription) GetStats() map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return map[string]interface{}{
+		"id":         s.ID,
+		"type":       s.Type,
+		"exchange":   s.Exchange,
+		"symbol":     s.Symbol,
+		"state":      s.GetState().String(),
+		"created_at": s.createdAt,
+		"last_data":  s.lastData,
+		"data_count": s.dataCount,
+	}
+}
+
+// IsActive 检查订阅是否活跃
+func (s *subscription) IsActive() bool {
+	return s.GetState() == SubscriptionActive
 }
 
 // dataHiveClient DataHive客户端实现
@@ -96,20 +169,43 @@ func NewDataHiveClient(client Client) DataHiveClient {
 
 // Connect 连接到服务器
 func (c *dataHiveClient) Connect(address string) error {
-	return c.client.Connect(address)
+	c.logger.Info("Connecting to DataHive server", zap.String("address", address))
+
+	err := c.client.Connect(address)
+	if err != nil {
+		c.logger.Error("Failed to connect to DataHive server",
+			zap.String("address", address),
+			zap.Error(err))
+		return err
+	}
+
+	c.logger.Info("Successfully connected to DataHive server", zap.String("address", address))
+	return nil
 }
 
 // Disconnect 断开连接
 func (c *dataHiveClient) Disconnect() error {
+	c.logger.Info("Disconnecting from DataHive server")
+
 	// 取消所有订阅
 	c.subMutex.Lock()
+	subscriptionCount := len(c.subscriptions)
 	for id, sub := range c.subscriptions {
 		c.closeSubscription(sub)
 		delete(c.subscriptions, id)
 	}
 	c.subMutex.Unlock()
 
-	return c.client.Disconnect()
+	c.logger.Info("Closed all subscriptions", zap.Int("count", subscriptionCount))
+
+	err := c.client.Disconnect()
+	if err != nil {
+		c.logger.Error("Failed to disconnect from DataHive server", zap.Error(err))
+		return err
+	}
+
+	c.logger.Info("Successfully disconnected from DataHive server")
+	return nil
 }
 
 // IsConnected 检查连接状态
@@ -127,6 +223,56 @@ func (c *dataHiveClient) SetErrorHandler(handler func(error)) {
 // GetStats 获取统计信息
 func (c *dataHiveClient) GetStats() *ClientStats {
 	return c.client.GetStats()
+}
+
+// GetSubscriptions 获取所有订阅信息
+func (c *dataHiveClient) GetSubscriptions() map[string]map[string]interface{} {
+	c.subMutex.RLock()
+	defer c.subMutex.RUnlock()
+
+	subscriptions := make(map[string]map[string]interface{})
+	for id, sub := range c.subscriptions {
+		subscriptions[id] = sub.GetStats()
+	}
+
+	return subscriptions
+}
+
+// GetSubscriptionStats 获取订阅统计汇总
+func (c *dataHiveClient) GetSubscriptionStats() map[string]interface{} {
+	c.subMutex.RLock()
+	defer c.subMutex.RUnlock()
+
+	stats := map[string]interface{}{
+		"total_subscriptions":       len(c.subscriptions),
+		"active_subscriptions":      0,
+		"pending_subscriptions":     0,
+		"closed_subscriptions":      0,
+		"error_subscriptions":       0,
+		"subscriptions_by_type":     make(map[string]int),
+		"subscriptions_by_exchange": make(map[string]int),
+	}
+
+	typeStats := stats["subscriptions_by_type"].(map[string]int)
+	exchangeStats := stats["subscriptions_by_exchange"].(map[string]int)
+
+	for _, sub := range c.subscriptions {
+		switch sub.GetState() {
+		case SubscriptionActive:
+			stats["active_subscriptions"] = stats["active_subscriptions"].(int) + 1
+		case SubscriptionPending:
+			stats["pending_subscriptions"] = stats["pending_subscriptions"].(int) + 1
+		case SubscriptionClosed:
+			stats["closed_subscriptions"] = stats["closed_subscriptions"].(int) + 1
+		case SubscriptionError:
+			stats["error_subscriptions"] = stats["error_subscriptions"].(int) + 1
+		}
+
+		typeStats[sub.Type]++
+		exchangeStats[sub.Exchange]++
+	}
+
+	return stats
 }
 
 // =============================================================================
@@ -316,57 +462,14 @@ func (c *dataHiveClient) FetchOrderBook(ctx context.Context, exchange, marketTyp
 // Watch Methods (Real-time WebSocket)
 // =============================================================================
 
-// WatchPrice 订阅轻量级价格更新
-func (c *dataHiveClient) WatchPrice(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.PriceUpdate, string, error) {
-	req := &pb.SubscribeRequest{
-		Exchange:   exchange,
-		MarketType: marketType,
-		Symbol:     symbol,
-		DataType:   pb.DataType_PRICE,
-	}
-
-	data, err := proto.Marshal(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_SUBSCRIBE, data, 30*time.Second)
-	if err != nil {
-		return nil, "", err
-	}
-
-	var subscribeResp pb.SubscribeResponse
-	if err := proto.Unmarshal(resp.Data, &subscribeResp); err != nil {
-		return nil, "", fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	if !subscribeResp.Success {
-		return nil, "", fmt.Errorf("subscription failed: %s", subscribeResp.Message)
-	}
-
-	// 创建订阅
-	priceCh := make(chan *pb.PriceUpdate, 100)
-	_, cancel := context.WithCancel(ctx)
-
-	sub := &subscription{
-		ID:       subscribeResp.Topic,
-		Type:     "price",
-		Exchange: exchange,
-		Symbol:   symbol,
-		PriceCh:  priceCh,
-		cancel:   cancel,
-		done:     make(chan struct{}),
-	}
-
-	c.subMutex.Lock()
-	c.subscriptions[sub.ID] = sub
-	c.subMutex.Unlock()
-
-	return priceCh, sub.ID, nil
-}
-
 // WatchKline 订阅K线更新
 func (c *dataHiveClient) WatchKline(ctx context.Context, exchange, marketType, symbol, timeframe string) (<-chan *pb.KlineUpdate, string, error) {
+	c.logger.Info("Starting kline subscription",
+		zap.String("exchange", exchange),
+		zap.String("market_type", marketType),
+		zap.String("symbol", symbol),
+		zap.String("timeframe", timeframe))
+
 	req := &pb.SubscribeRequest{
 		Exchange:      exchange,
 		MarketType:    marketType,
@@ -396,21 +499,33 @@ func (c *dataHiveClient) WatchKline(ctx context.Context, exchange, marketType, s
 
 	// 创建订阅
 	klineCh := make(chan *pb.KlineUpdate, 100)
-	_, cancel := context.WithCancel(ctx)
+	subCtx, cancel := context.WithCancel(ctx)
 
 	sub := &subscription{
-		ID:       subscribeResp.Topic,
-		Type:     "kline",
-		Exchange: exchange,
-		Symbol:   symbol,
-		KlineCh:  klineCh,
-		cancel:   cancel,
-		done:     make(chan struct{}),
+		ID:        subscribeResp.Topic,
+		Type:      protocol.StreamEventKline,
+		Exchange:  exchange,
+		Symbol:    symbol,
+		state:     int32(SubscriptionPending),
+		createdAt: time.Now(),
+		KlineCh:   klineCh,
+		ctx:       subCtx,
+		cancel:    cancel,
+		done:      make(chan struct{}),
 	}
+
+	// 标记为活跃状态
+	atomic.StoreInt32(&sub.state, int32(SubscriptionActive))
 
 	c.subMutex.Lock()
 	c.subscriptions[sub.ID] = sub
 	c.subMutex.Unlock()
+
+	c.logger.Info("Kline subscription created successfully",
+		zap.String("subscription_id", sub.ID),
+		zap.String("exchange", exchange),
+		zap.String("symbol", symbol),
+		zap.String("timeframe", timeframe))
 
 	return klineCh, sub.ID, nil
 }
@@ -449,7 +564,7 @@ func (c *dataHiveClient) WatchTrades(ctx context.Context, exchange, marketType, 
 
 	sub := &subscription{
 		ID:       subscribeResp.Topic,
-		Type:     "trades",
+		Type:     protocol.StreamEventTrade,
 		Exchange: exchange,
 		Symbol:   symbol,
 		TradesCh: tradesCh,
@@ -499,7 +614,7 @@ func (c *dataHiveClient) WatchOrderBook(ctx context.Context, exchange, marketTyp
 
 	sub := &subscription{
 		ID:          subscribeResp.Topic,
-		Type:        "orderbook",
+		Type:        protocol.StreamEventOrderBook,
 		Exchange:    exchange,
 		Symbol:      symbol,
 		OrderBookCh: orderBookCh,
@@ -552,7 +667,7 @@ func (c *dataHiveClient) WatchMiniTicker(ctx context.Context, exchange, marketTy
 
 	sub := &subscription{
 		ID:           subscribeResp.Topic,
-		Type:         "miniTicker",
+		Type:         protocol.StreamEventMiniTicker,
 		Exchange:     exchange,
 		Symbol:       symbol,
 		MiniTickerCh: miniTickerCh,
@@ -601,7 +716,7 @@ func (c *dataHiveClient) WatchMarkPrice(ctx context.Context, exchange, marketTyp
 
 	sub := &subscription{
 		ID:          subscribeResp.Topic,
-		Type:        "markPrice",
+		Type:        protocol.StreamEventMarkPrice,
 		Exchange:    exchange,
 		Symbol:      symbol,
 		MarkPriceCh: markPriceCh,
@@ -650,7 +765,7 @@ func (c *dataHiveClient) WatchBookTicker(ctx context.Context, exchange, marketTy
 
 	sub := &subscription{
 		ID:           subscribeResp.Topic,
-		Type:         "bookTicker",
+		Type:         protocol.StreamEventBookTicker,
 		Exchange:     exchange,
 		Symbol:       symbol,
 		BookTickerCh: bookTickerCh,
@@ -665,65 +780,24 @@ func (c *dataHiveClient) WatchBookTicker(ctx context.Context, exchange, marketTy
 	return bookTickerCh, sub.ID, nil
 }
 
-// WatchFullTicker 订阅完整ticker更新
-func (c *dataHiveClient) WatchFullTicker(ctx context.Context, exchange, marketType, symbol string) (<-chan *pb.FullTickerUpdate, string, error) {
-	req := &pb.SubscribeRequest{
-		Exchange:   exchange,
-		MarketType: marketType,
-		Symbol:     symbol,
-		DataType:   pb.DataType_FULL_TICKER,
-	}
-
-	data, err := proto.Marshal(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	resp, err := c.client.SendRequestWithTimeout(pb.ActionType_SUBSCRIBE, data, 30*time.Second)
-	if err != nil {
-		return nil, "", err
-	}
-
-	var subscribeResp pb.SubscribeResponse
-	if err := proto.Unmarshal(resp.Data, &subscribeResp); err != nil {
-		return nil, "", fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	if !subscribeResp.Success {
-		return nil, "", fmt.Errorf("subscription failed: %s", subscribeResp.Message)
-	}
-
-	// 创建订阅
-	fullTickerCh := make(chan *pb.FullTickerUpdate, 100)
-	_, cancel := context.WithCancel(ctx)
-
-	sub := &subscription{
-		ID:           subscribeResp.Topic,
-		Type:         "fullTicker",
-		Exchange:     exchange,
-		Symbol:       symbol,
-		FullTickerCh: fullTickerCh,
-		cancel:       cancel,
-		done:         make(chan struct{}),
-	}
-
-	c.subMutex.Lock()
-	c.subscriptions[sub.ID] = sub
-	c.subMutex.Unlock()
-
-	return fullTickerCh, sub.ID, nil
-}
-
 // Unwatch 取消订阅
 func (c *dataHiveClient) Unwatch(subscriptionID string) error {
+	c.logger.Info("Canceling subscription", zap.String("subscription_id", subscriptionID))
+
 	c.subMutex.Lock()
 	sub, exists := c.subscriptions[subscriptionID]
 	if !exists {
 		c.subMutex.Unlock()
+		c.logger.Warn("Subscription not found", zap.String("subscription_id", subscriptionID))
 		return fmt.Errorf("subscription not found: %s", subscriptionID)
 	}
 	delete(c.subscriptions, subscriptionID)
 	c.subMutex.Unlock()
+
+	c.logger.Info("Removed subscription from map",
+		zap.String("subscription_id", subscriptionID),
+		zap.String("type", sub.Type),
+		zap.String("symbol", sub.Symbol))
 
 	// 发送取消订阅请求
 	req := &pb.UnsubscribeRequest{
@@ -743,7 +817,10 @@ func (c *dataHiveClient) Unwatch(subscriptionID string) error {
 	// 关闭订阅
 	c.closeSubscription(sub)
 
-	c.logger.Debug("Unsubscribed", zap.String("subscription_id", subscriptionID))
+	c.logger.Info("Successfully unsubscribed",
+		zap.String("subscription_id", subscriptionID),
+		zap.String("type", sub.Type),
+		zap.String("symbol", sub.Symbol))
 	return nil
 }
 
@@ -753,31 +830,89 @@ func (c *dataHiveClient) Unwatch(subscriptionID string) error {
 
 // registerHandlers 注册消息处理器
 func (c *dataHiveClient) registerHandlers() {
-	c.client.RegisterHandler(pb.ActionType_PRICE_UPDATE, c.handlePriceUpdate)
 	c.client.RegisterHandler(pb.ActionType_KLINE_UPDATE, c.handleKlineUpdate)
 	c.client.RegisterHandler(pb.ActionType_TRADE_UPDATE, c.handleTradeUpdate)
 	c.client.RegisterHandler(pb.ActionType_ORDERBOOK_UPDATE, c.handleOrderBookUpdate)
+	c.client.RegisterHandler(pb.ActionType_MINI_TICKER_UPDATE, c.handleMiniTickerUpdate)
+	c.client.RegisterHandler(pb.ActionType_MARK_PRICE_UPDATE, c.handleMarkPriceUpdate)
+	c.client.RegisterHandler(pb.ActionType_BOOK_TICKER_UPDATE, c.handleBookTickerUpdate)
 }
 
-// handlePriceUpdate 处理价格更新消息
-func (c *dataHiveClient) handlePriceUpdate(msg *pb.Message) error {
-	var update pb.PriceUpdate
+// handleMiniTickerUpdate 处理迷你ticker更新消息
+func (c *dataHiveClient) handleMiniTickerUpdate(msg *pb.Message) error {
+	var update pb.MiniTickerUpdate
 	if err := proto.Unmarshal(msg.Data, &update); err != nil {
-		return fmt.Errorf("failed to unmarshal price update: %w", err)
+		return fmt.Errorf("failed to unmarshal mini ticker update: %w", err)
 	}
 
 	c.subMutex.RLock()
 	sub, exists := c.subscriptions[update.Topic]
 	c.subMutex.RUnlock()
 
-	if !exists || sub.PriceCh == nil {
+	if !exists || sub.MiniTickerCh == nil || !sub.IsActive() {
+		return nil
+	}
+
+	// 更新数据统计
+	sub.UpdateLastData()
+
+	select {
+	case sub.MiniTickerCh <- &update:
+		c.logger.Debug("Mini ticker update sent",
+			zap.String("topic", update.Topic),
+			zap.String("symbol", sub.Symbol))
+	default:
+		c.logger.Warn("Mini ticker channel full, dropping message",
+			zap.String("topic", update.Topic),
+			zap.String("symbol", sub.Symbol))
+	}
+
+	return nil
+}
+
+// handleMarkPriceUpdate 处理标记价格更新消息
+func (c *dataHiveClient) handleMarkPriceUpdate(msg *pb.Message) error {
+	var update pb.MarkPriceUpdate
+	if err := proto.Unmarshal(msg.Data, &update); err != nil {
+		return fmt.Errorf("failed to unmarshal mark price update: %w", err)
+	}
+
+	c.subMutex.RLock()
+	sub, exists := c.subscriptions[update.Topic]
+	c.subMutex.RUnlock()
+
+	if !exists || sub.MarkPriceCh == nil {
 		return nil
 	}
 
 	select {
-	case sub.PriceCh <- &update:
+	case sub.MarkPriceCh <- &update:
 	default:
-		c.logger.Warn("Price channel full, dropping message", zap.String("topic", update.Topic))
+		c.logger.Warn("Mark price channel full, dropping message", zap.String("topic", update.Topic))
+	}
+
+	return nil
+}
+
+// handleBookTickerUpdate 处理最优买卖价更新消息
+func (c *dataHiveClient) handleBookTickerUpdate(msg *pb.Message) error {
+	var update pb.BookTickerUpdate
+	if err := proto.Unmarshal(msg.Data, &update); err != nil {
+		return fmt.Errorf("failed to unmarshal book ticker update: %w", err)
+	}
+
+	c.subMutex.RLock()
+	sub, exists := c.subscriptions[update.Topic]
+	c.subMutex.RUnlock()
+
+	if !exists || sub.BookTickerCh == nil {
+		return nil
+	}
+
+	select {
+	case sub.BookTickerCh <- &update:
+	default:
+		c.logger.Warn("Book ticker channel full, dropping message", zap.String("topic", update.Topic))
 	}
 
 	return nil
@@ -861,13 +996,22 @@ func (c *dataHiveClient) handleOrderBookUpdate(msg *pb.Message) error {
 
 // closeSubscription 关闭订阅
 func (c *dataHiveClient) closeSubscription(sub *subscription) {
+	// 设置为关闭状态
+	sub.SetState(SubscriptionClosed)
+
 	if sub.cancel != nil {
 		sub.cancel()
 	}
 
 	// 关闭channels
-	if sub.PriceCh != nil {
-		close(sub.PriceCh)
+	if sub.MiniTickerCh != nil {
+		close(sub.MiniTickerCh)
+	}
+	if sub.MarkPriceCh != nil {
+		close(sub.MarkPriceCh)
+	}
+	if sub.BookTickerCh != nil {
+		close(sub.BookTickerCh)
 	}
 	if sub.KlineCh != nil {
 		close(sub.KlineCh)
@@ -881,6 +1025,11 @@ func (c *dataHiveClient) closeSubscription(sub *subscription) {
 	if sub.done != nil {
 		close(sub.done)
 	}
+
+	c.logger.Debug("Subscription closed",
+		zap.String("id", sub.ID),
+		zap.String("type", sub.Type),
+		zap.String("symbol", sub.Symbol))
 }
 
 // notifyError 通知错误

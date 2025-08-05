@@ -16,12 +16,12 @@ type SubscriptionManager struct {
 	mu sync.RWMutex
 
 	// 按数据类型和symbol分组的订阅者
-	tickerSubscribers    map[string][]chan *ccxt.WatchPrice     // key: symbol
-	orderBookSubscribers map[string][]chan *ccxt.WatchOrderBook // key: symbol
-	tradeSubscribers     map[string][]chan *ccxt.WatchTrade     // key: symbol
-	ohlcvSubscribers     map[string][]chan *ccxt.WatchOHLCV     // key: symbol_timeframe
-	balanceSubscribers   []chan *ccxt.WatchBalance              // 余额不需要symbol分组
-	orderSubscribers     []chan *ccxt.WatchOrder                // 订单不需要symbol分组
+	miniTickerSubscribers map[string][]chan *ccxt.WatchMiniTicker // key: symbol
+	orderBookSubscribers  map[string][]chan *ccxt.WatchOrderBook  // key: symbol
+	tradeSubscribers      map[string][]chan *ccxt.WatchTrade      // key: symbol
+	ohlcvSubscribers      map[string][]chan *ccxt.WatchOHLCV      // key: symbol_timeframe
+	balanceSubscribers    []chan *ccxt.WatchBalance               // 余额不需要symbol分组
+	orderSubscribers      []chan *ccxt.WatchOrder                 // 订单不需要symbol分组
 
 	// 订阅计数器 - 跟踪每个symbol的订阅数量
 	subscriptionCount map[string]int // key: symbol_datatype
@@ -33,45 +33,45 @@ type SubscriptionManager struct {
 // NewSubscriptionManager 创建订阅管理器
 func NewSubscriptionManager() *SubscriptionManager {
 	return &SubscriptionManager{
-		tickerSubscribers:    make(map[string][]chan *ccxt.WatchPrice),
-		orderBookSubscribers: make(map[string][]chan *ccxt.WatchOrderBook),
-		tradeSubscribers:     make(map[string][]chan *ccxt.WatchTrade),
-		ohlcvSubscribers:     make(map[string][]chan *ccxt.WatchOHLCV),
-		balanceSubscribers:   make([]chan *ccxt.WatchBalance, 0),
-		orderSubscribers:     make([]chan *ccxt.WatchOrder, 0),
-		subscriptionCount:    make(map[string]int),
-		subscriptionChannels: make(map[string]interface{}),
+		miniTickerSubscribers: make(map[string][]chan *ccxt.WatchMiniTicker),
+		orderBookSubscribers:  make(map[string][]chan *ccxt.WatchOrderBook),
+		tradeSubscribers:      make(map[string][]chan *ccxt.WatchTrade),
+		ohlcvSubscribers:      make(map[string][]chan *ccxt.WatchOHLCV),
+		balanceSubscribers:    make([]chan *ccxt.WatchBalance, 0),
+		orderSubscribers:      make([]chan *ccxt.WatchOrder, 0),
+		subscriptionCount:     make(map[string]int),
+		subscriptionChannels:  make(map[string]interface{}),
 	}
 }
 
-// SubscribePrice 订阅价格数据
-func (sm *SubscriptionManager) SubscribePrice(symbol string) (string, <-chan *ccxt.WatchPrice) {
+// SubscribeMiniTicker 订阅迷你ticker数据
+func (sm *SubscriptionManager) SubscribeMiniTicker(symbol string) (string, <-chan *ccxt.WatchMiniTicker) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	// 创建专用channel
-	userChan := make(chan *ccxt.WatchPrice, 1000)
+	userChan := make(chan *ccxt.WatchMiniTicker, 1000)
 
 	// 生成唯一订阅ID
-	subscriptionID := fmt.Sprintf("ticker_%s_%d", symbol, time.Now().UnixNano())
+	subscriptionID := fmt.Sprintf("miniticker_%s_%d", symbol, time.Now().UnixNano())
 
 	// 注册订阅
-	if sm.tickerSubscribers[symbol] == nil {
-		sm.tickerSubscribers[symbol] = make([]chan *ccxt.WatchPrice, 0)
+	if sm.miniTickerSubscribers[symbol] == nil {
+		sm.miniTickerSubscribers[symbol] = make([]chan *ccxt.WatchMiniTicker, 0)
 	}
-	sm.tickerSubscribers[symbol] = append(sm.tickerSubscribers[symbol], userChan)
+	sm.miniTickerSubscribers[symbol] = append(sm.miniTickerSubscribers[symbol], userChan)
 
 	// 记录订阅ID映射
 	sm.subscriptionChannels[subscriptionID] = userChan
 
 	// 更新计数
-	countKey := fmt.Sprintf("%s_ticker", symbol)
+	countKey := fmt.Sprintf("%s_miniticker", symbol)
 	sm.subscriptionCount[countKey]++
 
-	logger.Debug("Subscribed to ticker",
+	logger.Debug("Subscribed to mini ticker",
 		zap.String("symbol", symbol),
 		zap.String("subscription_id", subscriptionID),
-		zap.Int("subscriber_count", len(sm.tickerSubscribers[symbol])))
+		zap.Int("subscriber_count", len(sm.miniTickerSubscribers[symbol])))
 
 	return subscriptionID, userChan
 }
@@ -172,10 +172,10 @@ func (sm *SubscriptionManager) SubscribeOrders() (string, <-chan *ccxt.WatchOrde
 	return subscriptionID, userChan
 }
 
-// DistributePrice 分发ticker数据到所有订阅者
-func (sm *SubscriptionManager) DistributePrice(symbol string, data *ccxt.WatchPrice) {
+// DistributeMiniTicker 分发mini ticker数据到所有订阅者
+func (sm *SubscriptionManager) DistributeMiniTicker(symbol string, data *ccxt.WatchMiniTicker) {
 	sm.mu.RLock()
-	subscribers := sm.tickerSubscribers[symbol]
+	subscribers := sm.miniTickerSubscribers[symbol]
 	sm.mu.RUnlock()
 
 	if len(subscribers) == 0 {
@@ -285,8 +285,8 @@ func (sm *SubscriptionManager) Unsubscribe(subscriptionID string) error {
 
 	// 根据订阅ID前缀确定类型并移除
 	switch ch := ch.(type) {
-	case chan *ccxt.WatchPrice:
-		sm.removePriceSubscription(ch)
+	case chan *ccxt.WatchMiniTicker:
+		sm.removeMiniTickerSubscription(ch)
 	case chan *ccxt.WatchOrderBook:
 		sm.removeOrderBookSubscription(ch)
 	case chan *ccxt.WatchTrade:
@@ -301,7 +301,7 @@ func (sm *SubscriptionManager) Unsubscribe(subscriptionID string) error {
 
 	// 关闭channel
 	switch ch := ch.(type) {
-	case chan *ccxt.WatchPrice:
+	case chan *ccxt.WatchMiniTicker:
 		close(ch)
 	case chan *ccxt.WatchOrderBook:
 		close(ch)
@@ -320,21 +320,21 @@ func (sm *SubscriptionManager) Unsubscribe(subscriptionID string) error {
 	return nil
 }
 
-// removePriceSubscription 移除ticker订阅（辅助方法）
-func (sm *SubscriptionManager) removePriceSubscription(targetCh chan *ccxt.WatchPrice) {
-	for symbol, subscribers := range sm.tickerSubscribers {
+// removeMiniTickerSubscription 移除mini ticker订阅（辅助方法）
+func (sm *SubscriptionManager) removeMiniTickerSubscription(targetCh chan *ccxt.WatchMiniTicker) {
+	for symbol, subscribers := range sm.miniTickerSubscribers {
 		for i, ch := range subscribers {
 			if ch == targetCh {
 				// 移除该订阅者
-				sm.tickerSubscribers[symbol] = append(subscribers[:i], subscribers[i+1:]...)
+				sm.miniTickerSubscribers[symbol] = append(subscribers[:i], subscribers[i+1:]...)
 
 				// 更新计数
-				countKey := fmt.Sprintf("%s_ticker", symbol)
+				countKey := fmt.Sprintf("%s_miniticker", symbol)
 				sm.subscriptionCount[countKey]--
 
 				if sm.subscriptionCount[countKey] == 0 {
 					delete(sm.subscriptionCount, countKey)
-					delete(sm.tickerSubscribers, symbol)
+					delete(sm.miniTickerSubscribers, symbol)
 				}
 				return
 			}
@@ -369,7 +369,7 @@ func (sm *SubscriptionManager) GetStats() map[string]interface{} {
 	defer sm.mu.RUnlock()
 
 	return map[string]interface{}{
-		"ticker_symbols":      len(sm.tickerSubscribers),
+		"miniticker_symbols":  len(sm.miniTickerSubscribers),
 		"orderbook_symbols":   len(sm.orderBookSubscribers),
 		"trades_symbols":      len(sm.tradeSubscribers),
 		"ohlcv_symbols":       len(sm.ohlcvSubscribers),
@@ -388,7 +388,7 @@ func (sm *SubscriptionManager) Close() {
 	// 关闭所有channels
 	for _, ch := range sm.subscriptionChannels {
 		switch ch := ch.(type) {
-		case chan *ccxt.WatchPrice:
+		case chan *ccxt.WatchMiniTicker:
 			close(ch)
 		case chan *ccxt.WatchOrderBook:
 			close(ch)
@@ -404,7 +404,7 @@ func (sm *SubscriptionManager) Close() {
 	}
 
 	// 清理所有映射
-	sm.tickerSubscribers = make(map[string][]chan *ccxt.WatchPrice)
+	sm.miniTickerSubscribers = make(map[string][]chan *ccxt.WatchMiniTicker)
 	sm.orderBookSubscribers = make(map[string][]chan *ccxt.WatchOrderBook)
 	sm.tradeSubscribers = make(map[string][]chan *ccxt.WatchTrade)
 	sm.ohlcvSubscribers = make(map[string][]chan *ccxt.WatchOHLCV)

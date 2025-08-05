@@ -11,6 +11,7 @@ import (
 
 	"github.com/riven-blade/datahive/pkg/ccxt"
 	"github.com/riven-blade/datahive/pkg/logger"
+	"github.com/riven-blade/datahive/pkg/protocol"
 	"github.com/riven-blade/datahive/pkg/utils"
 
 	"github.com/spf13/cast"
@@ -40,7 +41,6 @@ type StreamSubscribers struct {
 	timeframe  string // for kline only
 
 	// 订阅者channels
-	tickerSubs     []chan *ccxt.WatchPrice
 	miniTickerSubs []chan *ccxt.WatchMiniTicker
 	markPriceSubs  []chan *ccxt.WatchMarkPrice
 	bookTickerSubs []chan *ccxt.WatchBookTicker
@@ -90,7 +90,9 @@ func (sm *StreamManager) RegisterStream(streamName string) {
 		dataType:        dataType,
 		symbol:          symbol,
 		timeframe:       timeframe,
-		tickerSubs:      make([]chan *ccxt.WatchPrice, 0),
+		miniTickerSubs:  make([]chan *ccxt.WatchMiniTicker, 0),
+		markPriceSubs:   make([]chan *ccxt.WatchMarkPrice, 0),
+		bookTickerSubs:  make([]chan *ccxt.WatchBookTicker, 0),
 		depthSubs:       make([]chan *ccxt.WatchOrderBook, 0),
 		tradeSubs:       make([]chan *ccxt.WatchTrade, 0),
 		klineSubs:       make([]chan *ccxt.WatchOHLCV, 0),
@@ -104,10 +106,11 @@ func (sm *StreamManager) RegisterStream(streamName string) {
 	// 启动stream处理协程
 	go sm.processStream(streamName, streamChan, subscribers)
 
-	logger.Debug("Registered new stream",
+	logger.Info("Registered new stream",
 		zap.String("stream", streamName),
 		zap.String("symbol", symbol),
-		zap.String("data_type", dataType))
+		zap.String("data_type", dataType),
+		zap.String("timeframe", timeframe))
 }
 
 // SubscribeToStream 订阅数据流
@@ -129,11 +132,13 @@ func (sm *StreamManager) SubscribeToStream(streamName string, dataType string) (
 func (sm *StreamManager) RouteMessage(rawMessage []byte) error {
 	var msg map[string]interface{}
 	if err := json.Unmarshal(rawMessage, &msg); err != nil {
+		logger.Error("Failed to unmarshal websocket message", zap.Error(err), zap.ByteString("raw_message", rawMessage))
 		return err
 	}
 
 	// 处理多路复用格式: {"stream": "btcusdt@ticker", "data": {...}}
 	if stream, ok := msg["stream"].(string); ok {
+		logger.Debug("Routing multiplexed message", zap.String("stream", stream))
 		return sm.routeToStream(stream, rawMessage)
 	}
 
@@ -141,15 +146,25 @@ func (sm *StreamManager) RouteMessage(rawMessage []byte) error {
 	eventType, hasEvent := msg["e"].(string)
 	symbol, hasSymbol := msg["s"].(string)
 
+	logger.Info("Processing single subscription message",
+		zap.String("event", eventType),
+		zap.String("symbol", symbol),
+		zap.Bool("hasEvent", hasEvent),
+		zap.Bool("hasSymbol", hasSymbol),
+		zap.ByteString("raw_message", rawMessage))
+
 	if !hasEvent || !hasSymbol {
-		logger.Debug("Unknown message format, ignoring", zap.ByteString("message", rawMessage))
+		logger.Warn("Unknown message format, ignoring",
+			zap.ByteString("message", rawMessage),
+			zap.String("event", eventType),
+			zap.String("symbol", symbol))
 		return nil // 忽略未知格式的消息
 	}
 
 	// 根据事件类型和交易对构造stream name
 	streamName := sm.constructStreamName(strings.ToLower(symbol), eventType, msg)
 
-	logger.Debug("Constructed stream name from message",
+	logger.Info("Constructed stream name from message",
 		zap.String("event", eventType),
 		zap.String("symbol", symbol),
 		zap.String("stream_name", streamName))
@@ -165,7 +180,19 @@ func (sm *StreamManager) routeToStream(streamName string, rawMessage []byte) err
 
 	if !exists {
 		// 未注册的stream，记录但不报错
-		logger.Debug("Received message for unregistered stream", zap.String("stream", streamName))
+		logger.Warn("Received message for unregistered stream",
+			zap.String("stream", streamName),
+			zap.ByteString("raw_message", rawMessage))
+
+		// 列出所有已注册的stream以便调试
+		sm.mu.RLock()
+		registeredStreams := make([]string, 0, len(sm.streamChannels))
+		for stream := range sm.streamChannels {
+			registeredStreams = append(registeredStreams, stream)
+		}
+		sm.mu.RUnlock()
+
+		logger.Info("Currently registered streams", zap.Strings("streams", registeredStreams))
 		return nil
 	}
 
@@ -187,6 +214,15 @@ func (sm *StreamManager) constructStreamName(symbol, eventType string, msg map[s
 		return fmt.Sprintf("%s@trade", symbol)
 	case "24hrTicker":
 		return fmt.Sprintf("%s@ticker", symbol)
+	case "24hrMiniTicker":
+		// 24小时迷你价格统计事件
+		return fmt.Sprintf("%s@miniTicker", symbol)
+	case "bookTicker":
+		// 最优挂单信息事件
+		return fmt.Sprintf("%s@bookTicker", symbol)
+	case "markPriceUpdate":
+		// Binance期货标记价格事件
+		return fmt.Sprintf("%s@mark_price", symbol)
 	case "kline":
 		// 从kline数据中获取interval
 		if klineData, ok := msg["k"].(map[string]interface{}); ok {
@@ -233,6 +269,10 @@ func (sm *StreamManager) processStream(streamName string, streamChan <-chan []by
 func (sm *StreamManager) processStreamMessage(rawMessage []byte, subscribers *StreamSubscribers) error {
 	var msg map[string]interface{}
 	if err := json.Unmarshal(rawMessage, &msg); err != nil {
+		logger.Error("Failed to unmarshal stream message",
+			zap.Error(err),
+			zap.String("stream", subscribers.streamName),
+			zap.ByteString("raw_message", rawMessage))
 		return err
 	}
 
@@ -240,31 +280,43 @@ func (sm *StreamManager) processStreamMessage(rawMessage []byte, subscribers *St
 	var data map[string]interface{}
 	if dataField, ok := msg["data"].(map[string]interface{}); ok {
 		data = dataField
+		logger.Debug("Processing multiplexed stream data",
+			zap.String("stream", subscribers.streamName),
+			zap.String("data_type", subscribers.dataType))
 	} else {
 		// 处理单独订阅格式: 消息本身就是数据
 		data = msg
+		logger.Debug("Processing direct stream data",
+			zap.String("stream", subscribers.streamName),
+			zap.String("data_type", subscribers.dataType))
 	}
 
+	logger.Info("Processing stream message",
+		zap.String("stream", subscribers.streamName),
+		zap.String("data_type", subscribers.dataType),
+		zap.String("symbol", subscribers.symbol))
+
 	switch subscribers.dataType {
-	case "ticker":
-		return sm.processTicker(data, subscribers)
-	case "miniTicker":
+	case protocol.StreamEventMiniTicker:
 		return sm.processMiniTicker(data, subscribers)
-	case "markPrice":
+	case protocol.StreamEventMarkPrice:
 		return sm.processMarkPrice(data, subscribers)
-	case "bookTicker":
+	case protocol.StreamEventBookTicker:
 		return sm.processBookTicker(data, subscribers)
-	case "depth":
+	case protocol.StreamEventOrderBook, "depth":
 		return sm.processDepth(data, subscribers)
-	case "trade":
+	case protocol.StreamEventTrade:
 		return sm.processTrade(data, subscribers)
-	case "kline":
+	case protocol.StreamEventKline:
 		return sm.processKline(data, subscribers)
-	case "balance":
+	case protocol.StreamEventBalance:
 		return sm.processBalance(data, subscribers)
-	case "orders":
+	case protocol.StreamEventOrders:
 		return sm.processOrder(data, subscribers)
 	default:
+		logger.Error("Unknown data type for stream processing",
+			zap.String("data_type", subscribers.dataType),
+			zap.String("stream", subscribers.streamName))
 		return fmt.Errorf("unknown data type: %s", subscribers.dataType)
 	}
 }
@@ -277,55 +329,49 @@ func (ss *StreamSubscribers) Subscribe(dataType string) (string, interface{}, er
 	subscriptionID := fmt.Sprintf("%s_%s_%d", ss.streamName, dataType, time.Now().UnixNano())
 
 	switch dataType {
-	case "ticker":
-		userChan := make(chan *ccxt.WatchPrice, 1000)
-		ss.tickerSubs = append(ss.tickerSubs, userChan)
-		ss.subscriptionMap[subscriptionID] = userChan
-		return subscriptionID, userChan, nil
-
-	case "miniTicker":
+	case protocol.StreamEventMiniTicker:
 		userChan := make(chan *ccxt.WatchMiniTicker, 1000)
 		ss.miniTickerSubs = append(ss.miniTickerSubs, userChan)
 		ss.subscriptionMap[subscriptionID] = userChan
 		return subscriptionID, userChan, nil
 
-	case "markPrice":
+	case protocol.StreamEventMarkPrice:
 		userChan := make(chan *ccxt.WatchMarkPrice, 1000)
 		ss.markPriceSubs = append(ss.markPriceSubs, userChan)
 		ss.subscriptionMap[subscriptionID] = userChan
 		return subscriptionID, userChan, nil
 
-	case "bookTicker":
+	case protocol.StreamEventBookTicker:
 		userChan := make(chan *ccxt.WatchBookTicker, 1000)
 		ss.bookTickerSubs = append(ss.bookTickerSubs, userChan)
 		ss.subscriptionMap[subscriptionID] = userChan
 		return subscriptionID, userChan, nil
 
-	case "depth":
+	case protocol.StreamEventOrderBook, "depth":
 		userChan := make(chan *ccxt.WatchOrderBook, 500)
 		ss.depthSubs = append(ss.depthSubs, userChan)
 		ss.subscriptionMap[subscriptionID] = userChan
 		return subscriptionID, userChan, nil
 
-	case "trade":
+	case protocol.StreamEventTrade:
 		userChan := make(chan *ccxt.WatchTrade, 1000)
 		ss.tradeSubs = append(ss.tradeSubs, userChan)
 		ss.subscriptionMap[subscriptionID] = userChan
 		return subscriptionID, userChan, nil
 
-	case "kline":
+	case protocol.StreamEventKline:
 		userChan := make(chan *ccxt.WatchOHLCV, 500)
 		ss.klineSubs = append(ss.klineSubs, userChan)
 		ss.subscriptionMap[subscriptionID] = userChan
 		return subscriptionID, userChan, nil
 
-	case "balance":
+	case protocol.StreamEventBalance:
 		userChan := make(chan *ccxt.WatchBalance, 100)
 		ss.balanceSubs = append(ss.balanceSubs, userChan)
 		ss.subscriptionMap[subscriptionID] = userChan
 		return subscriptionID, userChan, nil
 
-	case "orders":
+	case protocol.StreamEventOrders:
 		userChan := make(chan *ccxt.WatchOrder, 100)
 		ss.orderSubs = append(ss.orderSubs, userChan)
 		ss.subscriptionMap[subscriptionID] = userChan
@@ -359,7 +405,7 @@ func (sm *StreamManager) parseStreamName(streamName string) (symbol, dataType, t
 	symbol = strings.ToUpper(symbolPart)
 
 	if strings.HasPrefix(streamType, "kline_") {
-		dataType = "kline"
+		dataType = protocol.StreamEventKline
 		timeframe = strings.TrimPrefix(streamType, "kline_")
 	} else {
 		dataType = streamType
@@ -370,35 +416,6 @@ func (sm *StreamManager) parseStreamName(streamName string) (symbol, dataType, t
 }
 
 // 数据处理方法
-func (sm *StreamManager) processTicker(data map[string]interface{}, subscribers *StreamSubscribers) error {
-	logger.Debug("Processing ticker data",
-		zap.String("stream", subscribers.streamName),
-		zap.Int("subscribers", len(subscribers.tickerSubs)))
-
-	timestamp := utils.SafeGetInt64WithDefault(data, "E", time.Now().UnixMilli())
-
-	ticker := &ccxt.WatchPrice{
-		Symbol:     subscribers.symbol,
-		TimeStamp:  timestamp,
-		Price:      utils.SafeGetFloatWithDefault(data, "c", 0),
-		StreamName: subscribers.streamName, // StreamName name
-	}
-
-	// 分发给所有订阅者
-	subscribers.mu.RLock()
-	tickerSubs := subscribers.tickerSubs
-	subscribers.mu.RUnlock()
-
-	for _, ch := range tickerSubs {
-		select {
-		case ch <- ticker:
-		default:
-			// channel满了就跳过
-		}
-	}
-
-	return nil
-}
 
 // processMiniTicker 处理轻量级ticker数据
 func (sm *StreamManager) processMiniTicker(data map[string]interface{}, subscribers *StreamSubscribers) error {
@@ -748,23 +765,58 @@ func (ss *StreamSubscribers) RemoveSubscription(subscriptionID string) error {
 
 	// 根据channel类型找到并移除
 	switch ch := ch.(type) {
-	case chan *ccxt.WatchPrice:
-		ss.removeTickerSubscription(ch)
+	case chan *ccxt.WatchMiniTicker:
+		ss.removeMiniTickerSubscription(ch)
+		close(ch)
+	case chan *ccxt.WatchMarkPrice:
+		ss.removeMarkPriceSubscription(ch)
+		close(ch)
+	case chan *ccxt.WatchBookTicker:
+		ss.removeBookTickerSubscription(ch)
 		close(ch)
 	case chan *ccxt.WatchOrderBook:
 		ss.removeDepthSubscription(ch)
 		close(ch)
-		// ... 其他类型
+	case chan *ccxt.WatchTrade:
+		ss.removeTradeSubscription(ch)
+		close(ch)
+	case chan *ccxt.WatchOHLCV:
+		ss.removeKlineSubscription(ch)
+		close(ch)
+	case chan *ccxt.WatchBalance:
+		ss.removeBalanceSubscription(ch)
+		close(ch)
+	case chan *ccxt.WatchOrder:
+		ss.removeOrderSubscription(ch)
+		close(ch)
 	}
 
 	delete(ss.subscriptionMap, subscriptionID)
 	return nil
 }
 
-func (ss *StreamSubscribers) removeTickerSubscription(targetCh chan *ccxt.WatchPrice) {
-	for i, ch := range ss.tickerSubs {
+func (ss *StreamSubscribers) removeMiniTickerSubscription(targetCh chan *ccxt.WatchMiniTicker) {
+	for i, ch := range ss.miniTickerSubs {
 		if ch == targetCh {
-			ss.tickerSubs = append(ss.tickerSubs[:i], ss.tickerSubs[i+1:]...)
+			ss.miniTickerSubs = append(ss.miniTickerSubs[:i], ss.miniTickerSubs[i+1:]...)
+			return
+		}
+	}
+}
+
+func (ss *StreamSubscribers) removeMarkPriceSubscription(targetCh chan *ccxt.WatchMarkPrice) {
+	for i, ch := range ss.markPriceSubs {
+		if ch == targetCh {
+			ss.markPriceSubs = append(ss.markPriceSubs[:i], ss.markPriceSubs[i+1:]...)
+			return
+		}
+	}
+}
+
+func (ss *StreamSubscribers) removeBookTickerSubscription(targetCh chan *ccxt.WatchBookTicker) {
+	for i, ch := range ss.bookTickerSubs {
+		if ch == targetCh {
+			ss.bookTickerSubs = append(ss.bookTickerSubs[:i], ss.bookTickerSubs[i+1:]...)
 			return
 		}
 	}
@@ -774,6 +826,42 @@ func (ss *StreamSubscribers) removeDepthSubscription(targetCh chan *ccxt.WatchOr
 	for i, ch := range ss.depthSubs {
 		if ch == targetCh {
 			ss.depthSubs = append(ss.depthSubs[:i], ss.depthSubs[i+1:]...)
+			return
+		}
+	}
+}
+
+func (ss *StreamSubscribers) removeTradeSubscription(targetCh chan *ccxt.WatchTrade) {
+	for i, ch := range ss.tradeSubs {
+		if ch == targetCh {
+			ss.tradeSubs = append(ss.tradeSubs[:i], ss.tradeSubs[i+1:]...)
+			return
+		}
+	}
+}
+
+func (ss *StreamSubscribers) removeKlineSubscription(targetCh chan *ccxt.WatchOHLCV) {
+	for i, ch := range ss.klineSubs {
+		if ch == targetCh {
+			ss.klineSubs = append(ss.klineSubs[:i], ss.klineSubs[i+1:]...)
+			return
+		}
+	}
+}
+
+func (ss *StreamSubscribers) removeBalanceSubscription(targetCh chan *ccxt.WatchBalance) {
+	for i, ch := range ss.balanceSubs {
+		if ch == targetCh {
+			ss.balanceSubs = append(ss.balanceSubs[:i], ss.balanceSubs[i+1:]...)
+			return
+		}
+	}
+}
+
+func (ss *StreamSubscribers) removeOrderSubscription(targetCh chan *ccxt.WatchOrder) {
+	for i, ch := range ss.orderSubs {
+		if ch == targetCh {
+			ss.orderSubs = append(ss.orderSubs[:i], ss.orderSubs[i+1:]...)
 			return
 		}
 	}
@@ -807,7 +895,11 @@ func (ss *StreamSubscribers) CloseAll() {
 
 	for _, ch := range ss.subscriptionMap {
 		switch ch := ch.(type) {
-		case chan *ccxt.WatchPrice:
+		case chan *ccxt.WatchMiniTicker:
+			close(ch)
+		case chan *ccxt.WatchMarkPrice:
+			close(ch)
+		case chan *ccxt.WatchBookTicker:
 			close(ch)
 		case chan *ccxt.WatchOrderBook:
 			close(ch)
@@ -823,7 +915,9 @@ func (ss *StreamSubscribers) CloseAll() {
 	}
 
 	ss.subscriptionMap = make(map[string]interface{})
-	ss.tickerSubs = make([]chan *ccxt.WatchPrice, 0)
+	ss.miniTickerSubs = make([]chan *ccxt.WatchMiniTicker, 0)
+	ss.markPriceSubs = make([]chan *ccxt.WatchMarkPrice, 0)
+	ss.bookTickerSubs = make([]chan *ccxt.WatchBookTicker, 0)
 	ss.depthSubs = make([]chan *ccxt.WatchOrderBook, 0)
 	ss.tradeSubs = make([]chan *ccxt.WatchTrade, 0)
 	ss.klineSubs = make([]chan *ccxt.WatchOHLCV, 0)
@@ -853,15 +947,17 @@ func (ss *StreamSubscribers) GetStats() map[string]interface{} {
 	defer ss.mu.RUnlock()
 
 	return map[string]interface{}{
-		"symbol":              ss.symbol,
-		"data_type":           ss.dataType,
-		"timeframe":           ss.timeframe,
-		"ticker_subscribers":  len(ss.tickerSubs),
-		"depth_subscribers":   len(ss.depthSubs),
-		"trade_subscribers":   len(ss.tradeSubs),
-		"kline_subscribers":   len(ss.klineSubs),
-		"balance_subscribers": len(ss.balanceSubs),
-		"order_subscribers":   len(ss.orderSubs),
-		"total_subscribers":   len(ss.subscriptionMap),
+		"symbol":                 ss.symbol,
+		"data_type":              ss.dataType,
+		"timeframe":              ss.timeframe,
+		"miniticker_subscribers": len(ss.miniTickerSubs),
+		"markprice_subscribers":  len(ss.markPriceSubs),
+		"bookticker_subscribers": len(ss.bookTickerSubs),
+		"depth_subscribers":      len(ss.depthSubs),
+		"trade_subscribers":      len(ss.tradeSubs),
+		"kline_subscribers":      len(ss.klineSubs),
+		"balance_subscribers":    len(ss.balanceSubs),
+		"order_subscribers":      len(ss.orderSubs),
+		"total_subscribers":      len(ss.subscriptionMap),
 	}
 }
