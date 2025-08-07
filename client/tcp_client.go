@@ -622,7 +622,7 @@ func (c *TCPClient) startAutoReconnect(disconnectErr error) {
 	currentAttempts := atomic.LoadInt64(&c.reconnectAttempts)
 
 	c.logger.Debug("Starting reconnection attempt",
-		zap.Int64("attempt", currentAttempts),
+		zap.Int64("attempt1", currentAttempts),
 		zap.Int("max_attempts", c.config.MaxReconnectAttempts),
 		zap.String("address", c.lastAddress))
 
