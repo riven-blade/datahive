@@ -5,577 +5,1008 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/riven-blade/datahive/pkg/ccxt"
 	"github.com/riven-blade/datahive/pkg/logger"
 	"github.com/riven-blade/datahive/pkg/protocol"
-	"github.com/riven-blade/datahive/pkg/utils"
-
 	"github.com/spf13/cast"
 	"go.uber.org/zap"
 )
 
-// ========== Binance WebSocket 实现 ==========
+// ============================================================================
+// Binance WebSocket Client
+// ============================================================================
 
-// BinanceWebSocket Binance WebSocket客户端
-type BinanceWebSocket struct {
-	*ccxt.WebSocketManager
-	exchange      *Binance
-	isConnected   bool
-	subscriptions map[string]bool
-	listenKey     string // 私有数据监听密钥
-	connection    *ccxt.WebSocketConnection
+// MessageRateLimiter WebSocket消息频率限制器
+// Binance限制: 每秒最多5条消息 (包括PING, PONG, JSON控制消息)
+type MessageRateLimiter struct {
+	tokens         int32         // 令牌数量
+	maxTokens      int32         // 最大令牌数 (5)
+	refillInterval time.Duration // 令牌填充间隔 (200ms per token)
+	lastRefill     int64         // 上次填充时间 (UnixMilli)
+	mu             sync.Mutex    // 互斥锁
+}
 
-	// 流管理器 - 负责stream级别的数据分发
-	streamManager *StreamManager
+// NewMessageRateLimiter 创建消息频率限制器
+func NewMessageRateLimiter() *MessageRateLimiter {
+	return &MessageRateLimiter{
+		tokens:         5,                      // 初始满桶
+		maxTokens:      5,                      // 每秒5条消息
+		refillInterval: 200 * time.Millisecond, // 每200ms补充1个令牌
+		lastRefill:     time.Now().UnixMilli(),
+	}
+}
 
-	// 简单性能统计
+// Allow 检查是否允许发送消息 (非阻塞)
+func (mrl *MessageRateLimiter) Allow() bool {
+	mrl.mu.Lock()
+	defer mrl.mu.Unlock()
+
+	// 填充令牌
+	mrl.refillTokens()
+
+	// 检查是否有令牌
+	if mrl.tokens > 0 {
+		mrl.tokens--
+		return true
+	}
+	return false
+}
+
+// Wait 等待直到可以发送消息 (阻塞)
+func (mrl *MessageRateLimiter) Wait(ctx context.Context) error {
+	for {
+		if mrl.Allow() {
+			return nil
+		}
+
+		// 等待一小段时间再重试
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+			continue
+		}
+	}
+}
+
+// refillTokens 填充令牌
+func (mrl *MessageRateLimiter) refillTokens() {
+	now := time.Now().UnixMilli()
+	elapsed := now - mrl.lastRefill
+
+	if elapsed >= int64(mrl.refillInterval.Milliseconds()) {
+		// 计算应该添加的令牌数
+		tokensToAdd := int32(elapsed / int64(mrl.refillInterval.Milliseconds()))
+		mrl.tokens = min32(mrl.maxTokens, mrl.tokens+tokensToAdd)
+		mrl.lastRefill = now
+	}
+}
+
+// GetStatus 获取限制器状态
+func (mrl *MessageRateLimiter) GetStatus() map[string]interface{} {
+	mrl.mu.Lock()
+	defer mrl.mu.Unlock()
+
+	mrl.refillTokens()
+	return map[string]interface{}{
+		"tokens":     mrl.tokens,
+		"max_tokens": mrl.maxTokens,
+		"rate_limit": "5 messages per second",
+	}
+}
+
+// 辅助函数
+func min32(a, b int32) int32 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// WebSocketConfig 最佳实践配置
+type WebSocketConfig struct {
+	// 连接配置
+	MaxConnections       int           `json:"max_connections"`        // 最大连接数 (10)
+	StreamsPerConnection int           `json:"streams_per_connection"` // 每连接流数 (1000)
+	ReconnectDelay       time.Duration `json:"reconnect_delay"`        // 重连延迟 (3s)
+	MaxReconnectAttempts int           `json:"max_reconnect_attempts"` // 最大重连次数 (5)
+
+	// 批量处理
+	BatchSize     int           `json:"batch_size"`     // 批量大小 (200)
+	BatchInterval time.Duration `json:"batch_interval"` // 批量间隔 (100ms)
+
+	// 性能配置
+	ChannelBuffer       int           `json:"channel_buffer"`        // 通道缓冲 (1000)
+	HealthCheckInterval time.Duration `json:"health_check_interval"` // 健康检查 (30s)
+
+	// 自动清理
+	AutoCleanup     bool          `json:"auto_cleanup"`     // 自动清理
+	CleanupInterval time.Duration `json:"cleanup_interval"` // 清理间隔 (60s)
+	IdleTimeout     time.Duration `json:"idle_timeout"`     // 空闲超时 (5m)
+}
+
+// DefaultWebSocketConfig 默认配置
+func DefaultWebSocketConfig() *WebSocketConfig {
+	return &WebSocketConfig{
+		MaxConnections:       10,
+		StreamsPerConnection: 1000,
+		ReconnectDelay:       3 * time.Second,
+		MaxReconnectAttempts: 5,
+		BatchSize:            200,
+		BatchInterval:        100 * time.Millisecond,
+		ChannelBuffer:        1000,
+		HealthCheckInterval:  30 * time.Second,
+		AutoCleanup:          true,
+		CleanupInterval:      60 * time.Second,
+		IdleTimeout:          5 * time.Minute,
+	}
+}
+
+// WebSocket 最佳实践WebSocket客户端
+type WebSocket struct {
+	config   *WebSocketConfig
+	exchange *Binance
+
+	// 连接池
+	connections []*WSConnection
+	connMutex   sync.RWMutex
+
+	// 流管理
+	streams       sync.Map // streamName -> *StreamData
+	subscriptions sync.Map // subscriptionID -> *SubData
+
+	// 批量处理
+	batchChan chan string
+	batchMap  sync.Map // streamName -> bool
+
+	// 消息频率限制器 (Binance限制: 每秒5条消息)
+	msgRateLimiter *MessageRateLimiter
+
+	// 状态
+	isRunning   int32
 	msgCount    int64
 	errorCount  int64
 	lastMsgTime int64
+
+	// 控制
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
-// NewBinanceWebSocket 创建Binance WebSocket客户端
-func NewBinanceWebSocket(exchange *Binance) *BinanceWebSocket {
-	return &BinanceWebSocket{
-		WebSocketManager: ccxt.NewWebSocketManager(),
-		exchange:         exchange,
-		subscriptions:    make(map[string]bool),
-		streamManager:    NewStreamManager(),
-		lastMsgTime:      time.Now().UnixMilli(),
+// WSConnection WebSocket连接
+type WSConnection struct {
+	ID          string
+	ws          *ccxt.WebSocketConnection
+	streamCount int32
+	isHealthy   int32
+	lastUsed    time.Time
+	mu          sync.RWMutex
+}
+
+// StreamData 流数据
+type StreamData struct {
+	Name        string
+	DataType    string
+	Connection  *WSConnection
+	Subscribers sync.Map // subscriptionID -> *SubData
+	SubCount    int32
+	LastUsed    time.Time
+	MsgCount    int64
+}
+
+// SubData 订阅数据
+type SubData struct {
+	ID         string
+	StreamName string
+	DataType   string
+	Channel    interface{}
+	CreatedAt  time.Time
+	LastUsed   time.Time
+}
+
+// BatchItem 批量项
+type BatchItem struct {
+	StreamName string
+	Timestamp  time.Time
+}
+
+// NewWebSocket 创建最佳实践WebSocket客户端
+func NewWebSocket(exchange *Binance, config *WebSocketConfig) *WebSocket {
+	if config == nil {
+		config = DefaultWebSocketConfig()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &WebSocket{
+		config:         config,
+		exchange:       exchange,
+		batchChan:      make(chan string, config.BatchSize*2),
+		msgRateLimiter: NewMessageRateLimiter(),
+		ctx:            ctx,
+		cancel:         cancel,
+		lastMsgTime:    time.Now().UnixMilli(),
 	}
 }
 
-// ========== WebSocket 连接管理 ==========
+// Start 启动WebSocket客户端
+func (ws *WebSocket) Start() error {
+	if !atomic.CompareAndSwapInt32(&ws.isRunning, 0, 1) {
+		return fmt.Errorf("websocket already running")
+	}
 
-// Connect 连接到Binance WebSocket
-func (ws *BinanceWebSocket) Connect(ctx context.Context) error {
+	// 创建初始连接
+	if err := ws.createConnection(); err != nil {
+		atomic.StoreInt32(&ws.isRunning, 0)
+		return fmt.Errorf("failed to create connection: %w", err)
+	}
+
+	// 启动批量处理器
+	ws.wg.Add(1)
+	go ws.batchProcessor()
+
+	// 启动健康检查
+	ws.wg.Add(1)
+	go ws.healthChecker()
+
+	// 启动清理器
+	if ws.config.AutoCleanup {
+		ws.wg.Add(1)
+		go ws.cleaner()
+	}
+
+	logger.Info("Best WebSocket client started",
+		zap.Int("max_connections", ws.config.MaxConnections),
+		zap.Int("streams_per_connection", ws.config.StreamsPerConnection))
+
+	return nil
+}
+
+// Stop 停止WebSocket客户端
+func (ws *WebSocket) Stop() {
+	if !atomic.CompareAndSwapInt32(&ws.isRunning, 1, 0) {
+		return
+	}
+
+	ws.cancel()
+	ws.wg.Wait()
+
+	// 关闭连接
+	ws.connMutex.Lock()
+	for _, conn := range ws.connections {
+		ws.closeConnection(conn)
+	}
+	ws.connections = nil
+	ws.connMutex.Unlock()
+
+	// 关闭通道
+	ws.subscriptions.Range(func(key, value interface{}) bool {
+		if sub, ok := value.(*SubData); ok {
+			ws.closeChannel(sub.Channel)
+		}
+		return true
+	})
+
+	logger.Info("Best WebSocket client stopped")
+}
+
+// Subscribe 订阅数据流
+func (ws *WebSocket) Subscribe(streamName, dataType string) (string, interface{}, error) {
+	if atomic.LoadInt32(&ws.isRunning) == 0 {
+		return "", nil, fmt.Errorf("websocket not running")
+	}
+
+	// 生成订阅ID
+	subID := fmt.Sprintf("%s_%d", streamName, time.Now().UnixNano())
+
+	// 创建通道
+	channel := ws.createChannel(dataType)
+	if channel == nil {
+		return "", nil, fmt.Errorf("unsupported data type: %s", dataType)
+	}
+
+	// 获取或创建流
+	streamData := ws.getOrCreateStream(streamName, dataType)
+
+	// 创建订阅
+	subData := &SubData{
+		ID:         subID,
+		StreamName: streamName,
+		DataType:   dataType,
+		Channel:    channel,
+		CreatedAt:  time.Now(),
+		LastUsed:   time.Now(),
+	}
+
+	// 注册订阅
+	ws.subscriptions.Store(subID, subData)
+	streamData.Subscribers.Store(subID, subData)
+	atomic.AddInt32(&streamData.SubCount, 1)
+
+	// 添加到批量队列
+	ws.addToBatch(streamName)
+
+	logger.Debug("Stream subscribed",
+		zap.String("subscription_id", subID),
+		zap.String("stream_name", streamName))
+
+	return subID, channel, nil
+}
+
+// Unsubscribe 取消订阅
+func (ws *WebSocket) Unsubscribe(subscriptionID string) error {
+	subInterface, exists := ws.subscriptions.Load(subscriptionID)
+	if !exists {
+		return fmt.Errorf("subscription not found")
+	}
+
+	subData := subInterface.(*SubData)
+
+	// 从流中移除
+	if streamInterface, exists := ws.streams.Load(subData.StreamName); exists {
+		streamData := streamInterface.(*StreamData)
+		streamData.Subscribers.Delete(subscriptionID)
+		atomic.AddInt32(&streamData.SubCount, -1)
+
+		// 如果没有订阅者了，发送取消订阅消息
+		if atomic.LoadInt32(&streamData.SubCount) == 0 {
+			ws.sendUnsubscribeMessage(subData.StreamName)
+		}
+	}
+
+	// 关闭通道
+	ws.closeChannel(subData.Channel)
+
+	// 删除订阅
+	ws.subscriptions.Delete(subscriptionID)
+
+	logger.Debug("Stream unsubscribed", zap.String("subscription_id", subscriptionID))
+	return nil
+}
+
+// sendUnsubscribeMessage 发送取消订阅消息
+func (ws *WebSocket) sendUnsubscribeMessage(streamName string) {
+	conn := ws.selectBestConnection()
+	if conn == nil {
+		logger.Error("No connection available for unsubscribe")
+		return
+	}
+
+	// 构造取消订阅消息
+	unsubscribeMsg := map[string]interface{}{
+		FieldMethod: MethodUnsubscribe,
+		FieldParams: []string{streamName},
+		FieldId:     time.Now().UnixNano(),
+	}
+
+	// 应用消息频率限制 (Binance: 每秒最多5条消息)
+	if err := ws.msgRateLimiter.Wait(ws.ctx); err != nil {
+		logger.Warn("Message rate limiter cancelled during unsubscribe", zap.Error(err))
+		return
+	}
+
+	if err := conn.ws.SendMessage(unsubscribeMsg); err != nil {
+		logger.Error("Failed to send unsubscribe", zap.Error(err), zap.String("stream", streamName))
+		return
+	}
+
+	logger.Debug("Unsubscribe message sent", zap.String("stream", streamName))
+}
+
+// ========== 内部方法 ==========
+
+// createConnection 创建连接
+func (ws *WebSocket) createConnection() error {
+	ws.connMutex.Lock()
+	defer ws.connMutex.Unlock()
+
+	if len(ws.connections) >= ws.config.MaxConnections {
+		return fmt.Errorf("max connections reached")
+	}
+
+	connID := fmt.Sprintf("best_%d_%d", len(ws.connections), time.Now().UnixNano())
+	manager := ccxt.NewWebSocketManager()
+
 	wsURL := ws.getWebSocketURL()
-	fmt.Printf("🔌 Connecting to Binance WebSocket: %s\n", wsURL)
+	if wsURL == "" {
+		return fmt.Errorf("websocket URL not configured")
+	}
 
-	conn, err := ws.WebSocketManager.ConnectWithRetry(ctx, wsURL, "binance-main", ws.exchange.config.WSMaxReconnect)
+	wsInst, err := manager.ConnectWithRetry(ws.ctx, wsURL, connID, ws.config.MaxReconnectAttempts)
 	if err != nil {
-		fmt.Printf("❌ Failed to connect to Binance WebSocket: %v\n", err)
 		return err
 	}
 
-	ws.connection = conn
+	conn := &WSConnection{
+		ID:        connID,
+		ws:        wsInst,
+		isHealthy: 1,
+		lastUsed:  time.Now(),
+	}
+
 	// 设置消息处理器
-	ws.setupMessageHandlers(conn)
-	ws.isConnected = true
+	wsInst.SetSubscribeHandler(ccxt.HandlerTypeAll, func(data []byte) error {
+		return ws.handleMessage(data, conn)
+	})
 
-	fmt.Printf("✅ Connected to Binance WebSocket successfully\n")
+	ws.connections = append(ws.connections, conn)
+
+	logger.Info("WebSocket connection created", zap.String("connection_id", connID))
 	return nil
 }
 
-// ConnectUserDataStream 连接用户数据流 (需要认证)
-func (ws *BinanceWebSocket) ConnectUserDataStream(ctx context.Context) error {
-	if !ws.exchange.config.RequiresAuth() {
-		return ccxt.NewAuthenticationError("API credentials required for user data stream")
+// getOrCreateStream 获取或创建流
+func (ws *WebSocket) getOrCreateStream(streamName, dataType string) *StreamData {
+	if streamInterface, exists := ws.streams.Load(streamName); exists {
+		return streamInterface.(*StreamData)
 	}
 
-	// 获取监听密钥
-	listenKey, err := ws.createListenKey(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to create listen key: %w", err)
-	}
-	ws.listenKey = listenKey
-
-	userStreamURL := ws.getUserStreamURL()
-	userConn, err := ws.WebSocketManager.ConnectWithRetry(ctx, userStreamURL, "binance-user", ws.exchange.config.WSMaxReconnect)
-	if err != nil {
-		return err
+	conn := ws.selectBestConnection()
+	if conn == nil {
+		ws.createConnection()
+		conn = ws.selectBestConnection()
 	}
 
-	// 设置用户数据消息处理器
-	ws.setupUserDataHandlers(userConn)
+	streamData := &StreamData{
+		Name:       streamName,
+		DataType:   dataType,
+		Connection: conn,
+		LastUsed:   time.Now(),
+	}
 
-	// 启动监听密钥保活
-	go ws.keepListenKeyAlive(ctx)
+	ws.streams.Store(streamName, streamData)
 
-	return nil
+	if conn != nil {
+		atomic.AddInt32(&conn.streamCount, 1)
+	}
+
+	return streamData
 }
 
-// Disconnect 断开WebSocket连接
-func (ws *BinanceWebSocket) Disconnect() error {
-	ws.isConnected = false
+// selectBestConnection 选择最佳连接
+func (ws *WebSocket) selectBestConnection() *WSConnection {
+	ws.connMutex.RLock()
+	defer ws.connMutex.RUnlock()
 
-	// 关闭用户数据流
-	if ws.listenKey != "" {
-		ctx := context.Background()
-		err := ws.deleteListenKey(ctx, ws.listenKey)
-		if err != nil {
-			ws.listenKey = ""
-			return err
+	var bestConn *WSConnection
+	var minLoad int32 = int32(ws.config.StreamsPerConnection)
+
+	for _, conn := range ws.connections {
+		if atomic.LoadInt32(&conn.isHealthy) == 0 {
+			continue
+		}
+
+		load := atomic.LoadInt32(&conn.streamCount)
+		if load < minLoad {
+			minLoad = load
+			bestConn = conn
 		}
 	}
 
-	// 关闭流管理器
-	if ws.streamManager != nil {
-		ws.streamManager.Close()
-	}
-
-	return nil
+	return bestConn
 }
 
-// IsConnected 检查连接状态
-func (ws *BinanceWebSocket) IsConnected() bool {
-	return ws.isConnected
-}
-
-// getWebSocketURL 获取WebSocket URL
-func (ws *BinanceWebSocket) getWebSocketURL() string {
-	// 优先使用统一的端点配置
-	if wsURL, exists := ws.exchange.endpoints["websocket"]; exists && wsURL != "" {
-		return wsURL
+// addToBatch 添加到批量队列
+func (ws *WebSocket) addToBatch(streamName string) {
+	// 检查是否已在批量队列中
+	if _, exists := ws.batchMap.LoadOrStore(streamName, true); exists {
+		return
 	}
 
-	// 降级到硬编码逻辑（兼容性）
-	// 测试网络
-	if ws.exchange.config.TestNet {
-		if ws.exchange.marketType == "future" || ws.exchange.marketType == "futures" {
-			return "wss://fstream.binancefuture.com/ws"
-		}
-		return "wss://testnet.binance.vision/ws"
-	}
-
-	// 生产环境
-	switch ws.exchange.marketType {
-	case "future", "futures":
-		return "wss://fstream.binance.com/ws" // USDM期货
-	case "delivery":
-		return "wss://dstream.binance.com/ws" // COINM期货
-	case "spot":
-		return "wss://stream.binance.com:9443/ws" // 现货市场
+	select {
+	case ws.batchChan <- streamName:
 	default:
-		// 其他
-		return ""
+		logger.Warn("Batch channel full", zap.String("stream", streamName))
 	}
 }
 
-// getUserStreamURL 获取用户数据流URL
-func (ws *BinanceWebSocket) getUserStreamURL() string {
-	// 测试网络
-	if ws.exchange.config.TestNet {
-		if ws.exchange.marketType == "futures" {
-			return fmt.Sprintf("wss://fstream.binancefuture.com/ws/%s", ws.listenKey)
-		}
-		return fmt.Sprintf("wss://testnet.binance.vision/ws/%s", ws.listenKey)
-	}
+// batchProcessor 批量处理器
+func (ws *WebSocket) batchProcessor() {
+	defer ws.wg.Done()
 
-	// 生产环境
-	switch ws.exchange.marketType {
-	case "futures":
-		return fmt.Sprintf("wss://fstream.binance.com/ws/%s", ws.listenKey)
-	case "delivery":
-		return fmt.Sprintf("wss://dstream.binance.com/ws/%s", ws.listenKey)
-	default: // spot或其他
-		return fmt.Sprintf("wss://stream.binance.com:9443/ws/%s", ws.listenKey)
-	}
-}
-
-// ========== 监听密钥管理 ==========
-
-// createListenKey 创建监听密钥
-func (ws *BinanceWebSocket) createListenKey(ctx context.Context) (string, error) {
-	url := "/api/v3/userDataStream"
-	params := make(map[string]interface{})
-
-	signedURL, headers, body, err := ws.exchange.Sign(url, "private", "POST", params, nil, nil)
-	if err != nil {
-		return "", err
-	}
-
-	respBody, err := ws.exchange.Fetch(ctx, signedURL, "POST", headers, fmt.Sprintf("%v", body))
-	if err != nil {
-		return "", err
-	}
-
-	var response struct {
-		ListenKey string `json:"listenKey"`
-	}
-	if err := json.Unmarshal([]byte(respBody), &response); err != nil {
-		return "", err
-	}
-
-	return response.ListenKey, nil
-}
-
-// keepListenKeyAlive 保持监听密钥活跃
-func (ws *BinanceWebSocket) keepListenKeyAlive(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Minute) // 每30分钟更新一次
+	batch := make([]string, 0, ws.config.BatchSize)
+	ticker := time.NewTicker(ws.config.BatchInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-ws.ctx.Done():
+			if len(batch) > 0 {
+				ws.processBatch(batch)
+			}
 			return
+
+		case stream := <-ws.batchChan:
+			batch = append(batch, stream)
+			if len(batch) >= ws.config.BatchSize {
+				ws.processBatch(batch)
+				batch = batch[:0]
+			}
+
 		case <-ticker.C:
-			if err := ws.extendListenKey(ctx, ws.listenKey); err != nil {
-				fmt.Printf("Failed to extend listen key: %v\n", err)
+			if len(batch) > 0 {
+				ws.processBatch(batch)
+				batch = batch[:0]
 			}
 		}
 	}
 }
 
-// extendListenKey 延长监听密钥
-func (ws *BinanceWebSocket) extendListenKey(ctx context.Context, listenKey string) error {
-	url := "/api/v3/userDataStream"
-	params := map[string]interface{}{
-		"listenKey": listenKey,
+// processBatch 处理批量
+func (ws *WebSocket) processBatch(streams []string) {
+	if len(streams) == 0 {
+		return
 	}
 
-	signedURL, headers, body, err := ws.exchange.Sign(url, "private", "PUT", params, nil, nil)
-	if err != nil {
-		return err
+	conn := ws.selectBestConnection()
+	if conn == nil {
+		logger.Error("No connection available for batch")
+		return
 	}
 
-	_, err = ws.exchange.Fetch(ctx, signedURL, "PUT", headers, fmt.Sprintf("%v", body))
-	return err
-}
-
-// deleteListenKey 删除监听密钥
-func (ws *BinanceWebSocket) deleteListenKey(ctx context.Context, listenKey string) error {
-	url := "/api/v3/userDataStream"
-	params := map[string]interface{}{
-		"listenKey": listenKey,
+	// 清除批量映射
+	for _, stream := range streams {
+		ws.batchMap.Delete(stream)
 	}
 
-	signedURL, headers, body, err := ws.exchange.Sign(url, "private", "DELETE", params, nil, nil)
-	if err != nil {
-		return err
-	}
-
-	_, err = ws.exchange.Fetch(ctx, signedURL, "DELETE", headers, fmt.Sprintf("%v", body))
-	return err
-}
-
-// ========== 消息处理 ==========
-func (ws *BinanceWebSocket) setupMessageHandlers(conn *ccxt.WebSocketConnection) {
-	conn.SetSubscribeHandler("all", func(data []byte) error {
-		return ws.handleMessage(data)
-	})
-}
-
-// setupUserDataHandlers 设置用户数据处理器
-func (ws *BinanceWebSocket) setupUserDataHandlers(conn *ccxt.WebSocketConnection) {
-	conn.SetSubscribeHandler("all", func(data []byte) error {
-		return ws.handleUserDataMessage(data)
-	})
-}
-
-// handleUserDataMessage 处理用户数据消息
-func (ws *BinanceWebSocket) handleUserDataMessage(data []byte) error {
-	var msg map[string]interface{}
-	if err := json.Unmarshal(data, &msg); err != nil {
-		return err
-	}
-
-	eventType, ok := msg["e"].(string)
-	if !ok {
-		return nil
-	}
-
-	// 用户数据流事件处理 - 集成到StreamManager
-	switch eventType {
-	case "outboundAccountPosition", "balanceUpdate":
-		// 余额更新事件 - 路由到StreamManager
-		if ws.streamManager != nil {
-			return ws.streamManager.RouteMessage(data)
-		}
-		logger.Debug("StreamManager not available for balance event", zap.String("eventType", eventType))
-		return nil
-	case "executionReport":
-		// 订单执行报告 - 路由到StreamManager
-		if ws.streamManager != nil {
-			return ws.streamManager.RouteMessage(data)
-		}
-		logger.Debug("StreamManager not available for order event", zap.String("eventType", eventType))
-		return nil
-	}
-
-	return nil
-}
-
-// SubscribeToStreams 订阅多个数据流
-func (ws *BinanceWebSocket) SubscribeToStreams(streams []string) error {
-	if !ws.isConnected || ws.connection == nil {
-		return fmt.Errorf("websocket not connected")
-	}
-
-	// Binance 支持通过单个连接订阅多个流
+	// 发送订阅
 	subscribeMsg := map[string]interface{}{
-		"method": "SUBSCRIBE",
-		"params": streams,
-		"id":     time.Now().UnixNano(),
+		FieldMethod: MethodSubscribe,
+		FieldParams: streams,
+		FieldId:     time.Now().UnixNano(),
 	}
 
-	fmt.Printf("📤 Sending subscription message: %+v\n", subscribeMsg)
-	return ws.connection.SendMessage(subscribeMsg)
+	// 应用消息频率限制 (Binance: 每秒最多5条消息)
+	if err := ws.msgRateLimiter.Wait(ws.ctx); err != nil {
+		logger.Warn("Message rate limiter cancelled", zap.Error(err))
+		// 重新添加到队列
+		for _, stream := range streams {
+			ws.addToBatch(stream)
+		}
+		return
+	}
+
+	if err := conn.ws.SendMessage(subscribeMsg); err != nil {
+		logger.Error("Failed to send batch", zap.Error(err))
+		// 重新添加到队列
+		for _, stream := range streams {
+			ws.addToBatch(stream)
+		}
+		return
+	}
+
+	logger.Debug("Batch sent",
+		zap.String("connection", conn.ID),
+		zap.Strings("streams", streams))
 }
 
-// UnsubscribeFromStreams 取消订阅数据流
-func (ws *BinanceWebSocket) UnsubscribeFromStreams(streams []string) error {
-	if !ws.isConnected || ws.connection == nil {
-		return fmt.Errorf("websocket not connected")
-	}
-
-	unsubscribeMsg := map[string]interface{}{
-		"method": "UNSUBSCRIBE",
-		"params": streams,
-		"id":     time.Now().UnixNano(),
-	}
-
-	return ws.connection.SendMessage(unsubscribeMsg)
-}
-
-// handleMessage
-func (ws *BinanceWebSocket) handleMessage(data []byte) error {
-	// 线程安全地更新统计信息
+// handleMessage 处理消息
+func (ws *WebSocket) handleMessage(data []byte, conn *WSConnection) error {
 	atomic.AddInt64(&ws.msgCount, 1)
 	atomic.StoreInt64(&ws.lastMsgTime, time.Now().UnixMilli())
 
-	fmt.Printf("📨 Received WebSocket message: %s\n", string(data))
-
 	var msg map[string]interface{}
 	if err := json.Unmarshal(data, &msg); err != nil {
 		atomic.AddInt64(&ws.errorCount, 1)
-		return fmt.Errorf("json parse error: %w", err)
+		return err
 	}
 
-	if _, hasResult := msg["result"]; hasResult {
-		fmt.Printf("✅ Subscription confirmation received: %s\n", string(data))
-		return nil // 订阅确认消息，忽略
+	// 处理订阅确认
+	if _, hasResult := msg[FieldResult]; hasResult {
+		return nil
 	}
 
-	if errorMsg, ok := msg["error"]; ok {
+	// 处理错误
+	if errorMsg, ok := msg[FieldError]; ok {
 		atomic.AddInt64(&ws.errorCount, 1)
-		fmt.Printf("❌ WebSocket error: %v\n", errorMsg)
 		return fmt.Errorf("websocket error: %v", errorMsg)
 	}
 
-	// 添加调试信息来分析消息格式
-	if eventType, ok := msg["e"].(string); ok {
-		fmt.Printf("🔍 Message event type: %s\n", eventType)
-	}
-	if stream, ok := msg["stream"].(string); ok {
-		fmt.Printf("🔍 Message stream: %s\n", stream)
-	}
-
-	// 路由到流管理器进行分发
-	if ws.streamManager != nil {
-		fmt.Printf("📡 Routing message to stream manager\n")
-		return ws.streamManager.RouteMessage(data)
+	// 解析流名称并分发
+	streamName := ws.parseStreamName(msg)
+	if streamName != "" {
+		return ws.distributeMessage(streamName, msg)
 	}
 
 	return nil
 }
 
-// WatchOrderBook 订阅订单簿数据 - 返回专用channel和订阅ID
-func (ws *BinanceWebSocket) WatchOrderBook(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchOrderBook, error) {
-	streamName := cast.ToString(params["stream_name"])
-
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "depth")
-	if err != nil {
-		return "", nil, err
+// parseStreamName 解析流名称
+func (ws *WebSocket) parseStreamName(msg map[string]interface{}) string {
+	if stream, ok := msg[FieldStream].(string); ok {
+		return stream
 	}
 
-	if err := ws.subscribe(streamName); err != nil {
-		ws.streamManager.Unsubscribe(subscriptionID)
-		return "", nil, err
-	}
-
-	// 类型转换：interface{} -> chan -> <-chan
-	orderBookChan := userChan.(chan *ccxt.WatchOrderBook)
-	return subscriptionID, (<-chan *ccxt.WatchOrderBook)(orderBookChan), nil
-}
-
-// WatchTrades 订阅交易数据 - 返回专用channel和订阅ID
-func (ws *BinanceWebSocket) WatchTrades(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchTrade, error) {
-	streamName := cast.ToString(params["stream_name"])
-
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, protocol.StreamEventTrade)
-	if err != nil {
-		return "", nil, err
-	}
-
-	if err := ws.subscribe(streamName); err != nil {
-		ws.streamManager.Unsubscribe(subscriptionID)
-		return "", nil, err
-	}
-
-	// 类型转换：interface{} -> chan -> <-chan
-	tradeChan := userChan.(chan *ccxt.WatchTrade)
-	return subscriptionID, (<-chan *ccxt.WatchTrade)(tradeChan), nil
-}
-
-// WatchOHLCV 订阅K线数据 - 返回专用channel和订阅ID
-func (ws *BinanceWebSocket) WatchOHLCV(ctx context.Context, symbol, timeframe string, params map[string]interface{}) (string, <-chan *ccxt.WatchOHLCV, error) {
-	streamName := cast.ToString(params["stream_name"])
-
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, protocol.StreamEventKline)
-	if err != nil {
-		return "", nil, err
-	}
-
-	if err := ws.subscribe(streamName); err != nil {
-		ws.streamManager.Unsubscribe(subscriptionID)
-		return "", nil, err
-	}
-
-	// 类型转换：interface{} -> chan -> <-chan
-	ohlcvChan := userChan.(chan *ccxt.WatchOHLCV)
-	return subscriptionID, (<-chan *ccxt.WatchOHLCV)(ohlcvChan), nil
-}
-
-// WatchBalance 订阅账户余额变化 - 返回专用channel和订阅ID
-func (ws *BinanceWebSocket) WatchBalance(ctx context.Context, params map[string]interface{}) (string, <-chan *ccxt.WatchBalance, error) {
-	if err := ws.ConnectUserDataStream(ctx); err != nil {
-		return "", nil, err
-	}
-
-	streamName := cast.ToString(params["stream_name"])
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "balance")
-	if err != nil {
-		return "", nil, err
-	}
-
-	// 类型转换：interface{} -> chan -> <-chan
-	balanceChan := userChan.(chan *ccxt.WatchBalance)
-	return subscriptionID, (<-chan *ccxt.WatchBalance)(balanceChan), nil
-}
-
-// WatchOrders 订阅订单状态变化 - 返回专用channel和订阅ID
-func (ws *BinanceWebSocket) WatchOrders(ctx context.Context, params map[string]interface{}) (string, <-chan *ccxt.WatchOrder, error) {
-	if err := ws.ConnectUserDataStream(ctx); err != nil {
-		return "", nil, err
-	}
-
-	streamName := cast.ToString(params["stream_name"])
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "orders")
-	if err != nil {
-		return "", nil, err
-	}
-
-	// 类型转换：interface{} -> chan -> <-chan
-	orderChan := userChan.(chan *ccxt.WatchOrder)
-	return subscriptionID, (<-chan *ccxt.WatchOrder)(orderChan), nil
-}
-
-// Unsubscribe 取消订阅
-func (ws *BinanceWebSocket) Unsubscribe(subscriptionID string) error {
-	if ws.streamManager != nil {
-		return ws.streamManager.Unsubscribe(subscriptionID)
-	}
-	return fmt.Errorf("stream manager not available")
-}
-
-// WatchMyTrades 订阅我的交易记录
-func (ws *BinanceWebSocket) WatchMyTrades(ctx context.Context, symbol string, since int64, limit int, params map[string]interface{}) (<-chan []ccxt.WatchTrade, error) {
-	if err := ws.ConnectUserDataStream(ctx); err != nil {
-		return nil, err
-	}
-
-	// 创建专门的交易频道
-	myTradesChan := make(chan []ccxt.WatchTrade, 100)
-	return myTradesChan, nil
-}
-
-// ========== 订阅管理改进 ==========
-
-// subscribe
-func (ws *BinanceWebSocket) subscribe(channel string) error {
-	if ws.subscriptions[channel] {
-		return nil // 已经订阅
-	}
-
-	if !ws.isConnected || ws.connection == nil {
-		return fmt.Errorf("websocket not connected")
-	}
-
-	// 发送订阅消息
-	if err := ws.SubscribeToStreams([]string{channel}); err != nil {
-		return err
-	}
-
-	ws.subscriptions[channel] = true
-
-	return nil
-}
-
-// unsubscribe 取消订阅频道
-func (ws *BinanceWebSocket) unsubscribe(channel string) error {
-	if !ws.subscriptions[channel] {
-		return nil // 未订阅
-	}
-
-	if !ws.isConnected || ws.connection == nil {
-		return fmt.Errorf("websocket not connected")
-	}
-
-	// 发送取消订阅消息
-	if err := ws.UnsubscribeFromStreams([]string{channel}); err != nil {
-		return err
-	}
-
-	delete(ws.subscriptions, channel)
-
-	return nil
-}
-
-// convertTimeframe 转换时间帧格式
-func (ws *BinanceWebSocket) convertTimeframe(timeframe string) string {
-	timeframes := map[string]string{
-		"1m":  "1m",
-		"3m":  "3m",
-		"5m":  "5m",
-		"15m": "15m",
-		"30m": "30m",
-		"1h":  "1h",
-		"2h":  "2h",
-		"4h":  "4h",
-		"6h":  "6h",
-		"8h":  "8h",
-		"12h": "12h",
-		"1d":  "1d",
-		"3d":  "3d",
-		"1w":  "1w",
-		"1M":  "1M",
-	}
-
-	if binanceTimeframe, exists := timeframes[timeframe]; exists {
-		return binanceTimeframe
-	}
-	return "1m" // 默认1分钟
-}
-
-func (ws *BinanceWebSocket) parsePriceLevels(data []interface{}) []ccxt.PriceLevel {
-	levels := make([]ccxt.PriceLevel, 0, len(data))
-	for _, levelData := range data {
-		if level, ok := levelData.([]interface{}); ok && len(level) >= 2 {
-			price := utils.SafeGetFloatWithDefault(map[string]interface{}{"price": level[0]}, "price", 0)
-			amount := utils.SafeGetFloatWithDefault(map[string]interface{}{"amount": level[1]}, "amount", 0)
-			levels = append(levels, ccxt.PriceLevel{Price: price, Amount: amount})
+	if eventType, ok := msg[FieldEventType].(string); ok {
+		if symbol, ok := msg[FieldSymbol].(string); ok {
+			return ws.constructStreamName(symbol, eventType, msg)
 		}
 	}
-	return levels
+
+	return ""
 }
 
-// convertToOrderBookSide 转换为OrderBookSide格式
-func (ws *BinanceWebSocket) convertToOrderBookSide(levels []ccxt.PriceLevel) ccxt.OrderBookSide {
-	prices := make([]float64, len(levels))
-	sizes := make([]float64, len(levels))
-	for i, level := range levels {
-		prices[i] = level.Price
-		sizes[i] = level.Amount
+// constructStreamName 构造流名称
+func (ws *WebSocket) constructStreamName(symbol, eventType string, msg map[string]interface{}) string {
+	symbol = strings.ToLower(symbol)
+	switch eventType {
+	case EventTypeTrade:
+		return fmt.Sprintf(StreamTemplateTrade, symbol)
+	case EventType24hrTicker:
+		return fmt.Sprintf(StreamTemplateTicker, symbol)
+	case EventType24hrMiniTicker:
+		return fmt.Sprintf(StreamTemplateMiniTicker, symbol)
+	case EventTypeBookTicker:
+		return fmt.Sprintf(StreamTemplateBookTicker, symbol)
+	case EventTypeMarkPrice:
+		return fmt.Sprintf(StreamTemplateMarkPrice, symbol)
+	case EventTypeKline:
+		if kData, ok := msg[FieldKlineData].(map[string]interface{}); ok {
+			if interval, ok := kData[FieldKlineInterval].(string); ok {
+				return fmt.Sprintf(StreamTemplateKline, symbol, interval)
+			}
+		}
+		return fmt.Sprintf(StreamTemplateKlineDefault, symbol)
+	case EventTypeDepthUpdate:
+		return fmt.Sprintf(StreamTemplateDepth, symbol)
+	default:
+		return fmt.Sprintf("%s@%s", symbol, eventType)
 	}
-	return ccxt.OrderBookSide{Price: prices, Size: sizes}
 }
 
-// GetStats 获取简单的性能统计（线程安全）
-func (ws *BinanceWebSocket) GetStats() map[string]interface{} {
+// distributeMessage 分发消息
+func (ws *WebSocket) distributeMessage(streamName string, data map[string]interface{}) error {
+	streamInterface, exists := ws.streams.Load(streamName)
+	if !exists {
+		return nil
+	}
+
+	streamData := streamInterface.(*StreamData)
+	atomic.AddInt64(&streamData.MsgCount, 1)
+	streamData.LastUsed = time.Now()
+
+	// 处理多路复用
+	if dataField, ok := data[FieldData].(map[string]interface{}); ok {
+		data = dataField
+	}
+
+	// 解析数据
+	parsedData := ws.parseData(data, streamData.DataType, streamData.Name)
+	if parsedData == nil {
+		return nil
+	}
+
+	// 分发到订阅者
+	streamData.Subscribers.Range(func(key, value interface{}) bool {
+		if sub, ok := value.(*SubData); ok {
+			sub.LastUsed = time.Now()
+			ws.sendToChannel(sub.Channel, parsedData)
+		}
+		return true
+	})
+
+	return nil
+}
+
+// parseData 解析数据
+func (ws *WebSocket) parseData(data map[string]interface{}, dataType, streamName string) interface{} {
+	switch dataType {
+	case protocol.StreamEventMiniTicker:
+		return &ccxt.WatchMiniTicker{
+			Symbol:      getString(data, FieldSymbol),
+			TimeStamp:   getInt64(data, FieldEventTime),
+			Open:        getFloat64(data, FieldOpen),
+			High:        getFloat64(data, FieldHigh),
+			Low:         getFloat64(data, FieldLow),
+			Close:       getFloat64(data, FieldClose),
+			Volume:      getFloat64(data, FieldVolume),
+			QuoteVolume: getFloat64(data, FieldQuoteVolume),
+			StreamName:  streamName,
+		}
+	case protocol.StreamEventMarkPrice:
+		return &ccxt.WatchMarkPrice{
+			Symbol:      getString(data, FieldSymbol),
+			TimeStamp:   getInt64(data, FieldEventTime),
+			MarkPrice:   getFloat64(data, FieldMarkPrice),
+			IndexPrice:  getFloat64(data, FieldIndexPrice),
+			FundingRate: getFloat64(data, FieldFundingRate),
+			FundingTime: getInt64(data, FieldFundingTime),
+			StreamName:  streamName,
+		}
+	case protocol.StreamEventBookTicker:
+		return &ccxt.WatchBookTicker{
+			Symbol:      getString(data, FieldSymbol),
+			TimeStamp:   getInt64(data, FieldUpdateId),
+			BidPrice:    getFloat64(data, FieldBidPrice),
+			BidQuantity: getFloat64(data, FieldBidQty),
+			AskPrice:    getFloat64(data, FieldAskPrice),
+			AskQuantity: getFloat64(data, FieldAskQty),
+			StreamName:  streamName,
+		}
+	case protocol.StreamEventOrderBook:
+		// 解析订单簿数据
+		var bids, asks [][]float64
+		if bidsData, ok := data["b"].([]interface{}); ok {
+			for _, bid := range bidsData {
+				if bidArray, ok := bid.([]interface{}); ok && len(bidArray) >= 2 {
+					price := getFloat64Interface(bidArray[0])
+					quantity := getFloat64Interface(bidArray[1])
+					bids = append(bids, []float64{price, quantity})
+				}
+			}
+		}
+		if asksData, ok := data["a"].([]interface{}); ok {
+			for _, ask := range asksData {
+				if askArray, ok := ask.([]interface{}); ok && len(askArray) >= 2 {
+					price := getFloat64Interface(askArray[0])
+					quantity := getFloat64Interface(askArray[1])
+					asks = append(asks, []float64{price, quantity})
+				}
+			}
+		}
+		return &ccxt.WatchOrderBook{
+			Symbol:     getString(data, FieldSymbol),
+			TimeStamp:  getInt64(data, FieldEventTime),
+			Bids:       bids,
+			Asks:       asks,
+			Nonce:      getInt64(data, "u"), // u是updateId，作为nonce使用
+			StreamName: streamName,
+		}
+	case protocol.StreamEventTrade:
+		price := getFloat64(data, FieldPrice)
+		amount := getFloat64(data, FieldQuantity)
+		return &ccxt.WatchTrade{
+			ID:        getString(data, FieldTradeId),
+			Symbol:    getString(data, FieldSymbol),
+			Timestamp: getInt64(data, FieldTradeTime),
+			Price:     price,
+			Amount:    amount,
+			Cost:      price * amount,
+			Side: func() string {
+				if getBool(data, "m") {
+					return "sell"
+				} else {
+					return "buy"
+				}
+			}(), // m表示是否是做市商买入
+			TakerOrMaker: func() string {
+				if getBool(data, "m") {
+					return "maker"
+				} else {
+					return "taker"
+				}
+			}(),
+			Type:        "market", // WebSocket交易事件通常是市价交易
+			Fee:         0,        // WebSocket流中通常不包含手续费信息
+			FeeCurrency: "",
+			StreamName:  streamName,
+		}
+	case protocol.StreamEventKline:
+		if kData, ok := data[FieldKlineData].(map[string]interface{}); ok {
+			return &ccxt.WatchOHLCV{
+				Symbol:     getString(kData, FieldSymbol),
+				Timeframe:  getString(kData, FieldKlineInterval),
+				Timestamp:  getInt64(kData, FieldKlineStartTime),
+				Open:       getFloat64(kData, FieldOpen),
+				High:       getFloat64(kData, FieldHigh),
+				Low:        getFloat64(kData, FieldLow),
+				Close:      getFloat64(kData, FieldClose),
+				Volume:     getFloat64(kData, FieldVolume),
+				IsClosed:   getBool(kData, "x"),  // x表示K线是否闭合
+				TradeCount: getInt64(kData, "n"), // n表示交易笔数
+				StreamName: streamName,
+			}
+		}
+	}
+	return nil
+}
+
+// createChannel 创建通道
+func (ws *WebSocket) createChannel(dataType string) interface{} {
+	buffer := ws.config.ChannelBuffer
+	switch dataType {
+	case protocol.StreamEventMiniTicker:
+		return make(chan *ccxt.WatchMiniTicker, buffer)
+	case protocol.StreamEventMarkPrice:
+		return make(chan *ccxt.WatchMarkPrice, buffer)
+	case protocol.StreamEventBookTicker:
+		return make(chan *ccxt.WatchBookTicker, buffer)
+	case protocol.StreamEventOrderBook:
+		return make(chan *ccxt.WatchOrderBook, buffer/2)
+	case protocol.StreamEventTrade:
+		return make(chan *ccxt.WatchTrade, buffer)
+	case protocol.StreamEventKline:
+		return make(chan *ccxt.WatchOHLCV, buffer/2)
+	case protocol.StreamEventBalance:
+		return make(chan *ccxt.WatchBalance, 100)
+	case protocol.StreamEventOrders:
+		return make(chan *ccxt.WatchOrder, 100)
+	}
+	return nil
+}
+
+// sendToChannel 发送到通道
+func (ws *WebSocket) sendToChannel(channel interface{}, data interface{}) {
+	switch ch := channel.(type) {
+	case chan *ccxt.WatchMiniTicker:
+		if ticker, ok := data.(*ccxt.WatchMiniTicker); ok {
+			select {
+			case ch <- ticker:
+			default:
+			}
+		}
+	case chan *ccxt.WatchMarkPrice:
+		if markPrice, ok := data.(*ccxt.WatchMarkPrice); ok {
+			select {
+			case ch <- markPrice:
+			default:
+			}
+		}
+	case chan *ccxt.WatchBookTicker:
+		if bookTicker, ok := data.(*ccxt.WatchBookTicker); ok {
+			select {
+			case ch <- bookTicker:
+			default:
+			}
+		}
+	case chan *ccxt.WatchOrderBook:
+		if orderBook, ok := data.(*ccxt.WatchOrderBook); ok {
+			select {
+			case ch <- orderBook:
+			default:
+			}
+		}
+	case chan *ccxt.WatchTrade:
+		if trade, ok := data.(*ccxt.WatchTrade); ok {
+			select {
+			case ch <- trade:
+			default:
+			}
+		}
+	case chan *ccxt.WatchOHLCV:
+		if ohlcv, ok := data.(*ccxt.WatchOHLCV); ok {
+			select {
+			case ch <- ohlcv:
+			default:
+			}
+		}
+	}
+}
+
+// closeChannel 关闭通道
+func (ws *WebSocket) closeChannel(channel interface{}) {
+	switch ch := channel.(type) {
+	case chan *ccxt.WatchMiniTicker:
+		close(ch)
+	case chan *ccxt.WatchMarkPrice:
+		close(ch)
+	case chan *ccxt.WatchBookTicker:
+		close(ch)
+	case chan *ccxt.WatchOrderBook:
+		close(ch)
+	case chan *ccxt.WatchTrade:
+		close(ch)
+	case chan *ccxt.WatchOHLCV:
+		close(ch)
+	case chan *ccxt.WatchBalance:
+		close(ch)
+	case chan *ccxt.WatchOrder:
+		close(ch)
+	}
+}
+
+// closeConnection 关闭连接
+func (ws *WebSocket) closeConnection(conn *WSConnection) {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	if conn.ws != nil {
+		conn.ws.Close()
+	}
+	atomic.StoreInt32(&conn.isHealthy, 0)
+}
+
+// getWebSocketURL 获取WebSocket URL
+func (ws *WebSocket) getWebSocketURL() string {
+	if wsURL, exists := ws.exchange.endpoints["websocket"]; exists && wsURL != "" {
+		return wsURL
+	}
+	return ""
+}
+
+// healthChecker 健康检查
+func (ws *WebSocket) healthChecker() {
+	defer ws.wg.Done()
+
+	ticker := time.NewTicker(ws.config.HealthCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ws.ctx.Done():
+			return
+		case <-ticker.C:
+			ws.performHealthCheck()
+		}
+	}
+}
+
+// performHealthCheck 执行健康检查
+func (ws *WebSocket) performHealthCheck() {
+	ws.connMutex.RLock()
+	defer ws.connMutex.RUnlock()
+
+	var healthyCount int
+	for _, conn := range ws.connections {
+		if ws.checkConnectionHealth(conn) {
+			healthyCount++
+		}
+	}
+
+	logger.Debug("Health check completed",
+		zap.Int("healthy_connections", healthyCount),
+		zap.Int("total_connections", len(ws.connections)))
+}
+
+// checkConnectionHealth 检查连接健康
+func (ws *WebSocket) checkConnectionHealth(conn *WSConnection) bool {
+	conn.mu.RLock()
+	defer conn.mu.RUnlock()
+
+	if conn.ws == nil {
+		atomic.StoreInt32(&conn.isHealthy, 0)
+		return false
+	}
+
+	atomic.StoreInt32(&conn.isHealthy, 1)
+	return true
+}
+
+// cleaner 清理器
+func (ws *WebSocket) cleaner() {
+	defer ws.wg.Done()
+
+	ticker := time.NewTicker(ws.config.CleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ws.ctx.Done():
+			return
+		case <-ticker.C:
+			ws.performCleanup()
+		}
+	}
+}
+
+// performCleanup 执行清理
+func (ws *WebSocket) performCleanup() {
+	now := time.Now()
+	cleanedCount := 0
+
+	ws.streams.Range(func(key, value interface{}) bool {
+		if streamData, ok := value.(*StreamData); ok {
+			if atomic.LoadInt32(&streamData.SubCount) == 0 &&
+				now.Sub(streamData.LastUsed) > ws.config.IdleTimeout {
+				ws.streams.Delete(key)
+				cleanedCount++
+			}
+		}
+		return true
+	})
+
+	if cleanedCount > 0 {
+		logger.Info("Cleanup completed", zap.Int("cleaned_streams", cleanedCount))
+	}
+}
+
+// GetStats 获取统计信息
+func (ws *WebSocket) GetStats() map[string]interface{} {
 	msgCount := atomic.LoadInt64(&ws.msgCount)
 	errorCount := atomic.LoadInt64(&ws.errorCount)
 	lastMsgTime := atomic.LoadInt64(&ws.lastMsgTime)
@@ -585,111 +1016,203 @@ func (ws *BinanceWebSocket) GetStats() map[string]interface{} {
 		errorRate = float64(errorCount) / float64(msgCount) * 100
 	}
 
+	var activeStreams, totalSubs int32
+	ws.streams.Range(func(key, value interface{}) bool {
+		activeStreams++
+		if streamData, ok := value.(*StreamData); ok {
+			totalSubs += atomic.LoadInt32(&streamData.SubCount)
+		}
+		return true
+	})
+
+	ws.connMutex.RLock()
+	connCount := len(ws.connections)
+	ws.connMutex.RUnlock()
+
+	// 获取消息频率限制器状态
+	rateLimiterStatus := ws.msgRateLimiter.GetStatus()
+
 	return map[string]interface{}{
-		"messages_received": msgCount,
-		"errors_count":      errorCount,
-		"last_message_time": lastMsgTime,
-		"error_rate":        errorRate,
-		"is_connected":      ws.isConnected,
+		"is_running":          atomic.LoadInt32(&ws.isRunning) == 1,
+		"connections":         connCount,
+		"active_streams":      activeStreams,
+		"total_subscriptions": totalSubs,
+		"messages_received":   msgCount,
+		"errors_count":        errorCount,
+		"last_message_time":   lastMsgTime,
+		"error_rate":          errorRate,
+		"rate_limiter":        rateLimiterStatus,
 	}
 }
 
-// ResetStats 重置统计信息（线程安全）
-func (ws *BinanceWebSocket) ResetStats() {
-	atomic.StoreInt64(&ws.msgCount, 0)
-	atomic.StoreInt64(&ws.errorCount, 0)
-	atomic.StoreInt64(&ws.lastMsgTime, time.Now().UnixMilli())
-}
+// ========== 便捷方法 ==========
 
-// ========== 辅助方法 ==========
-
-// ISO8601 将时间戳转换为ISO8601格式
-func (ws *BinanceWebSocket) ISO8601(timestamp int64) string {
-	return time.Unix(timestamp/1000, (timestamp%1000)*1000000).UTC().Format(time.RFC3339)
-}
-
-// ========== 连接健康状态管理 ==========
-
-// GetConnectionHealth 获取连接健康状态
-func (ws *BinanceWebSocket) GetConnectionHealth() map[string]interface{} {
-	generalStats := ws.GetStats()
-
-	health := map[string]interface{}{
-		"is_connected":         ws.isConnected,
-		"active_subscriptions": len(ws.subscriptions),
-		"performance_stats":    generalStats,
-		"market_type":          ws.exchange.marketType,
+// SubscribeMiniTicker 订阅轻量级ticker
+func (ws *WebSocket) SubscribeMiniTicker(symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMiniTicker, error) {
+	// 从params中解析流名称
+	var streamName string
+	if params != nil {
+		streamName = cast.ToString(params[ParamStream])
+	}
+	if streamName == "" {
+		return "", nil, fmt.Errorf("stream name is required in params[%s]", ParamStream)
 	}
 
-	return health
-}
-
-// =====================================================================================
-// 新增的增强Watch方法 - 支持新协议
-// =====================================================================================
-
-// WatchMiniTicker 监听轻量级ticker数据
-func (ws *BinanceWebSocket) WatchMiniTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMiniTicker, error) {
-	streamName := fmt.Sprintf("%s@miniTicker", strings.ToLower(symbol))
-
-	if stream, ok := params["stream_name"].(string); ok {
-		streamName = stream
-	}
-
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, protocol.StreamEventMiniTicker)
+	subID, channel, err := ws.Subscribe(streamName, protocol.StreamEventMiniTicker)
 	if err != nil {
 		return "", nil, err
 	}
-
-	if err := ws.subscribe(streamName); err != nil {
-		ws.streamManager.Unsubscribe(subscriptionID)
-		return "", nil, err
-	}
-
-	miniTickerChan := userChan.(chan *ccxt.WatchMiniTicker)
-	return subscriptionID, (<-chan *ccxt.WatchMiniTicker)(miniTickerChan), nil
+	ch := channel.(chan *ccxt.WatchMiniTicker)
+	return subID, ch, nil
 }
 
-// WatchMarkPrice 监听标记价格数据(仅期货)
-func (ws *BinanceWebSocket) WatchMarkPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMarkPrice, error) {
-	streamName := fmt.Sprintf("%s@mark_price", strings.ToLower(symbol))
-
-	if stream, ok := params["stream_name"].(string); ok {
-		streamName = stream
+// SubscribeMarkPrice 订阅标记价格
+func (ws *WebSocket) SubscribeMarkPrice(symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMarkPrice, error) {
+	// 从params中解析流名称
+	var streamName string
+	if params != nil {
+		streamName = cast.ToString(params[ParamStream])
+	}
+	if streamName == "" {
+		return "", nil, fmt.Errorf("stream name is required in params[%s]", ParamStream)
 	}
 
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, "mark_price")
+	subID, channel, err := ws.Subscribe(streamName, protocol.StreamEventMarkPrice)
 	if err != nil {
 		return "", nil, err
 	}
-
-	if err := ws.subscribe(streamName); err != nil {
-		ws.streamManager.Unsubscribe(subscriptionID)
-		return "", nil, err
-	}
-
-	markPriceChan := userChan.(chan *ccxt.WatchMarkPrice)
-	return subscriptionID, (<-chan *ccxt.WatchMarkPrice)(markPriceChan), nil
+	ch := channel.(chan *ccxt.WatchMarkPrice)
+	return subID, ch, nil
 }
 
-// WatchBookTicker 监听最优买卖价数据
-func (ws *BinanceWebSocket) WatchBookTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchBookTicker, error) {
-	streamName := fmt.Sprintf("%s@bookTicker", strings.ToLower(symbol))
-
-	if stream, ok := params["stream_name"].(string); ok {
-		streamName = stream
+// SubscribeBookTicker 订阅最优买卖价
+func (ws *WebSocket) SubscribeBookTicker(symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchBookTicker, error) {
+	// 从params中解析流名称
+	var streamName string
+	if params != nil {
+		streamName = cast.ToString(params[ParamStream])
+	}
+	if streamName == "" {
+		return "", nil, fmt.Errorf("stream name is required in params[%s]", ParamStream)
 	}
 
-	subscriptionID, userChan, err := ws.streamManager.SubscribeToStream(streamName, protocol.StreamEventBookTicker)
+	subID, channel, err := ws.Subscribe(streamName, protocol.StreamEventBookTicker)
 	if err != nil {
 		return "", nil, err
 	}
+	ch := channel.(chan *ccxt.WatchBookTicker)
+	return subID, ch, nil
+}
 
-	if err := ws.subscribe(streamName); err != nil {
-		ws.streamManager.Unsubscribe(subscriptionID)
-		return "", nil, err
+// SubscribeOrderBook 订阅订单簿
+func (ws *WebSocket) SubscribeOrderBook(symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchOrderBook, error) {
+	// 从params中解析流名称
+	var streamName string
+	if params != nil {
+		streamName = cast.ToString(params[ParamStream])
+	}
+	if streamName == "" {
+		return "", nil, fmt.Errorf("stream name is required in params[%s]", ParamStream)
 	}
 
-	bookTickerChan := userChan.(chan *ccxt.WatchBookTicker)
-	return subscriptionID, (<-chan *ccxt.WatchBookTicker)(bookTickerChan), nil
+	subID, channel, err := ws.Subscribe(streamName, protocol.StreamEventOrderBook)
+	if err != nil {
+		return "", nil, err
+	}
+	ch := channel.(chan *ccxt.WatchOrderBook)
+	return subID, ch, nil
+}
+
+// SubscribeTrades 订阅交易数据
+func (ws *WebSocket) SubscribeTrades(symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchTrade, error) {
+	// 从params中解析流名称
+	var streamName string
+	if params != nil {
+		streamName = cast.ToString(params[ParamStream])
+	}
+	if streamName == "" {
+		return "", nil, fmt.Errorf("stream name is required in params[%s]", ParamStream)
+	}
+
+	subID, channel, err := ws.Subscribe(streamName, protocol.StreamEventTrade)
+	if err != nil {
+		return "", nil, err
+	}
+	ch := channel.(chan *ccxt.WatchTrade)
+	return subID, ch, nil
+}
+
+// SubscribeKlines 订阅K线数据
+func (ws *WebSocket) SubscribeKlines(symbol, interval string, params map[string]interface{}) (string, <-chan *ccxt.WatchOHLCV, error) {
+	// 从params中解析流名称
+	var streamName string
+	if params != nil {
+		streamName = cast.ToString(params[ParamStream])
+	}
+	if streamName == "" {
+		return "", nil, fmt.Errorf("stream name is required in params[%s]", ParamStream)
+	}
+
+	subID, channel, err := ws.Subscribe(streamName, protocol.StreamEventKline)
+	if err != nil {
+		return "", nil, err
+	}
+	ch := channel.(chan *ccxt.WatchOHLCV)
+	return subID, ch, nil
+}
+
+// ========== 辅助函数 ==========
+
+// getString 从map中获取字符串值
+func getString(data map[string]interface{}, key string) string {
+	if v, ok := data[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// getInt64 从map中获取int64值
+func getInt64(data map[string]interface{}, key string) int64 {
+	if v, ok := data[key].(float64); ok {
+		return int64(v)
+	}
+	if v, ok := data[key].(int64); ok {
+		return v
+	}
+	return 0
+}
+
+// getFloat64 从map中获取float64值
+func getFloat64(data map[string]interface{}, key string) float64 {
+	if v, ok := data[key].(float64); ok {
+		return v
+	}
+	if v, ok := data[key].(string); ok {
+		// 尝试解析字符串为float64
+		if f, err := json.Number(v).Float64(); err == nil {
+			return f
+		}
+	}
+	return 0
+}
+
+// getFloat64Interface 从interface{}中获取float64值
+func getFloat64Interface(v interface{}) float64 {
+	if f, ok := v.(float64); ok {
+		return f
+	}
+	if s, ok := v.(string); ok {
+		if f, err := json.Number(s).Float64(); err == nil {
+			return f
+		}
+	}
+	return 0
+}
+
+// getBool 从map中获取bool值
+func getBool(data map[string]interface{}, key string) bool {
+	if v, ok := data[key].(bool); ok {
+		return v
+	}
+	return false
 }

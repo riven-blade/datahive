@@ -174,9 +174,9 @@ func (d *DataHive) Subscribe(ctx context.Context, req SubscriptionRequest) ([]st
 
 	// 提交所有订阅到Miner
 	for i := range minerSubs {
-		minerSub := minerSubs[i]
-		if err := miner.Subscribe(&minerSub); err != nil {
-			return nil, fmt.Errorf("failed to subscribe to miner for topic %s: %w", minerSub.Topic, err)
+		sub := minerSubs[i]
+		if err := miner.Subscribe(&sub); err != nil {
+			return nil, fmt.Errorf("failed to subscribe to miner for topic %s: %w", sub.Topic, err)
 		}
 	}
 
@@ -341,22 +341,13 @@ func (d *DataHive) getOrCreateMiner(exchange, market string) (*Miner, error) {
 	}
 
 	ctx := d.ctx
-	logger.Ctx(ctx).Debug("🔍 getOrCreateMiner开始执行",
-		zap.String("exchange", exchange),
-		zap.String("market", market))
-
 	key := d.getMinerKey(exchange, market)
-	logger.Ctx(ctx).Debug("🔑 生成Miner key", zap.String("key", key))
 
-	logger.Ctx(ctx).Debug("🔒 准备获取读锁")
 	d.mu.RLock()
-	logger.Ctx(ctx).Debug("✅ 成功获取读锁")
 	miner, exists := d.miners[key]
 	d.mu.RUnlock()
-	logger.Ctx(ctx).Debug("🔓 释放读锁", zap.Bool("exists", exists))
 
 	if exists {
-		logger.Ctx(ctx).Debug("✅ 找到已存在的Miner", zap.String("key", key))
 		return miner, nil
 	}
 

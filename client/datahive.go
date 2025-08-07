@@ -563,14 +563,18 @@ func (c *dataHiveClient) WatchTrades(ctx context.Context, exchange, marketType, 
 	_, cancel := context.WithCancel(ctx)
 
 	sub := &subscription{
-		ID:       subscribeResp.Topic,
-		Type:     protocol.StreamEventTrade,
-		Exchange: exchange,
-		Symbol:   symbol,
-		TradesCh: tradesCh,
-		cancel:   cancel,
-		done:     make(chan struct{}),
+		ID:        subscribeResp.Topic,
+		Type:      protocol.StreamEventTrade,
+		Exchange:  exchange,
+		Symbol:    symbol,
+		TradesCh:  tradesCh,
+		cancel:    cancel,
+		done:      make(chan struct{}),
+		createdAt: time.Now(),
 	}
+
+	// 设置订阅为活跃状态
+	sub.SetState(SubscriptionActive)
 
 	c.subMutex.Lock()
 	c.subscriptions[sub.ID] = sub
@@ -620,7 +624,11 @@ func (c *dataHiveClient) WatchOrderBook(ctx context.Context, exchange, marketTyp
 		OrderBookCh: orderBookCh,
 		cancel:      cancel,
 		done:        make(chan struct{}),
+		createdAt:   time.Now(),
 	}
+
+	// 设置订阅为活跃状态
+	sub.SetState(SubscriptionActive)
 
 	c.subMutex.Lock()
 	c.subscriptions[sub.ID] = sub
@@ -673,7 +681,11 @@ func (c *dataHiveClient) WatchMiniTicker(ctx context.Context, exchange, marketTy
 		MiniTickerCh: miniTickerCh,
 		cancel:       cancel,
 		done:         make(chan struct{}),
+		createdAt:    time.Now(),
 	}
+
+	// 设置订阅为活跃状态
+	sub.SetState(SubscriptionActive)
 
 	c.subMutex.Lock()
 	c.subscriptions[sub.ID] = sub
@@ -722,7 +734,11 @@ func (c *dataHiveClient) WatchMarkPrice(ctx context.Context, exchange, marketTyp
 		MarkPriceCh: markPriceCh,
 		cancel:      cancel,
 		done:        make(chan struct{}),
+		createdAt:   time.Now(),
 	}
+
+	// 设置订阅为活跃状态
+	sub.SetState(SubscriptionActive)
 
 	c.subMutex.Lock()
 	c.subscriptions[sub.ID] = sub
@@ -771,7 +787,11 @@ func (c *dataHiveClient) WatchBookTicker(ctx context.Context, exchange, marketTy
 		BookTickerCh: bookTickerCh,
 		cancel:       cancel,
 		done:         make(chan struct{}),
+		createdAt:    time.Now(),
 	}
+
+	// 设置订阅为活跃状态
+	sub.SetState(SubscriptionActive)
 
 	c.subMutex.Lock()
 	c.subscriptions[sub.ID] = sub
@@ -840,16 +860,38 @@ func (c *dataHiveClient) registerHandlers() {
 
 // handleMiniTickerUpdate 处理迷你ticker更新消息
 func (c *dataHiveClient) handleMiniTickerUpdate(msg *pb.Message) error {
+	//c.logger.Info("🔍 Received mini ticker message", zap.Int("data_size", len(msg.Data)))
+
 	var update pb.MiniTickerUpdate
 	if err := proto.Unmarshal(msg.Data, &update); err != nil {
+		c.logger.Error("❌ Failed to unmarshal mini ticker update", zap.Error(err))
 		return fmt.Errorf("failed to unmarshal mini ticker update: %w", err)
 	}
+
+	//c.logger.Info("📊 Parsed mini ticker update",
+	//	zap.String("topic", update.Topic),
+	//	zap.Any("ticker", update.MiniTicker))
 
 	c.subMutex.RLock()
 	sub, exists := c.subscriptions[update.Topic]
 	c.subMutex.RUnlock()
 
+	//c.logger.Info("🔎 Checking subscription",
+	//	zap.Bool("exists", exists),
+	//	zap.Bool("has_channel", sub != nil && sub.MiniTickerCh != nil),
+	//	zap.Bool("is_active", sub != nil && sub.IsActive()),
+	//	zap.String("sub_state", func() string {
+	//		if sub != nil {
+	//			return sub.GetState().String()
+	//		}
+	//		return "nil"
+	//	}()))
+
 	if !exists || sub.MiniTickerCh == nil || !sub.IsActive() {
+		c.logger.Warn("⚠️ Subscription check failed, dropping message",
+			zap.Bool("exists", exists),
+			zap.Bool("has_channel", sub != nil && sub.MiniTickerCh != nil),
+			zap.Bool("is_active", sub != nil && sub.IsActive()))
 		return nil
 	}
 
@@ -858,11 +900,11 @@ func (c *dataHiveClient) handleMiniTickerUpdate(msg *pb.Message) error {
 
 	select {
 	case sub.MiniTickerCh <- &update:
-		c.logger.Debug("Mini ticker update sent",
-			zap.String("topic", update.Topic),
-			zap.String("symbol", sub.Symbol))
+		//c.logger.Info("✅ Mini ticker update sent successfully",
+		//	zap.String("topic", update.Topic),
+		//	zap.String("symbol", sub.Symbol))
 	default:
-		c.logger.Warn("Mini ticker channel full, dropping message",
+		c.logger.Warn("⚠️ Mini ticker channel full, dropping message",
 			zap.String("topic", update.Topic),
 			zap.String("symbol", sub.Symbol))
 	}

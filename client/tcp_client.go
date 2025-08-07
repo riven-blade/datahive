@@ -179,7 +179,7 @@ func (c *TCPClient) Connect(address string) error {
 	c.address = address
 	c.lastAddress = address
 	atomic.StoreInt64(&c.reconnectAttempts, 0) // 重置重连计数器
-	c.logger.Info("Connecting to server", zap.String("address", address))
+	c.logger.Debug("Connecting to server", zap.String("address", address))
 
 	// 创建gnet客户端
 	gnetClient, err := gnet.NewClient(c)
@@ -213,7 +213,7 @@ func (c *TCPClient) Connect(address string) error {
 	c.stats.LastActivity = time.Now()
 	c.statsMu.Unlock()
 
-	c.logger.Info("Successfully connected to server")
+	c.logger.Info("Connected to server", zap.String("address", address))
 
 	// 触发连接回调
 	c.callbackMu.RLock()
@@ -231,7 +231,7 @@ func (c *TCPClient) Connect(address string) error {
 func (c *TCPClient) Disconnect() error {
 	atomic.StoreInt32(&c.state, int32(StateClosed))
 
-	c.logger.Info("Disconnecting from server")
+	c.logger.Debug("Disconnecting from server")
 
 	// 关闭连接
 	if c.conn != nil {
@@ -260,15 +260,27 @@ func (c *TCPClient) SendMessage(msg *pb.Message) error {
 		return fmt.Errorf("not connected")
 	}
 
+	c.logger.Debug("Sending message",
+		zap.String("action", msg.Action.String()),
+		zap.String("id", msg.Id),
+		zap.String("type", msg.Type.String()),
+		zap.Int("data_size", len(msg.Data)))
+
 	// 使用协议包编码消息
 	data, err := c.codec.EncodeMessage(msg)
 	if err != nil {
+		c.logger.Error("Failed to encode message",
+			zap.Error(err),
+			zap.String("action", msg.Action.String()))
 		return fmt.Errorf("failed to encode message: %w", err)
 	}
 
 	// 发送编码后的数据
 	_, err = c.conn.Write(data)
 	if err != nil {
+		c.logger.Error("Failed to send message",
+			zap.Error(err),
+			zap.String("action", msg.Action.String()))
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 
@@ -277,6 +289,10 @@ func (c *TCPClient) SendMessage(msg *pb.Message) error {
 	c.stats.BytesSent += int64(len(data))
 	c.stats.LastActivity = time.Now()
 	c.statsMu.Unlock()
+
+	c.logger.Debug("Message sent successfully",
+		zap.String("action", msg.Action.String()),
+		zap.Int("encoded_bytes", len(data)))
 
 	return nil
 }
@@ -410,12 +426,16 @@ func (c *TCPClient) OnShutdown(eng gnet.Engine) {
 }
 
 func (c *TCPClient) OnOpen(gc gnet.Conn) ([]byte, gnet.Action) {
-	c.logger.Debug("Connection opened")
+	c.logger.Debug("TCP connection opened",
+		zap.String("local_addr", gc.LocalAddr().String()),
+		zap.String("remote_addr", gc.RemoteAddr().String()))
 	return nil, gnet.None
 }
 
 func (c *TCPClient) OnClose(gc gnet.Conn, err error) gnet.Action {
-	c.logger.Warn("Connection closed", zap.Error(err))
+	c.logger.Debug("TCP connection closed",
+		zap.Error(err),
+		zap.String("remote_addr", gc.RemoteAddr().String()))
 
 	if atomic.LoadInt32(&c.state) != int32(StateClosed) {
 		atomic.StoreInt32(&c.state, int32(StateDisconnected))
@@ -457,11 +477,21 @@ func (c *TCPClient) OnTraffic(gc gnet.Conn) gnet.Action {
 
 // onTrafficData 处理接收到的数据，使用协议包解析
 func (c *TCPClient) onTrafficData(data []byte) error {
+	//c.logger.Debug("Processing received data",
+	//	zap.Int("bytes_received", len(data)))
+
 	// 使用协议包处理接收到的数据
 	messages, err := c.msgBuffer.ProcessData(data)
 	if err != nil {
+		c.logger.Error("Failed to process message data",
+			zap.Error(err),
+			zap.Int("data_length", len(data)))
 		return fmt.Errorf("failed to process message data: %w", err)
 	}
+
+	//c.logger.Debug("Parsed messages from data",
+	//	zap.Int("message_count", len(messages)),
+	//	zap.Int("data_bytes", len(data)))
 
 	// 处理解析出的所有消息
 	for _, msg := range messages {
@@ -488,6 +518,23 @@ func (c *TCPClient) OnTick() (delay time.Duration, action gnet.Action) {
 
 // handleMessage 处理收到的消息
 func (c *TCPClient) handleMessage(msg *pb.Message) {
+	//now := time.Now()
+	//receiveTime := now.UnixMilli()
+
+	// 计算消息延迟（接收时间 - 消息创建时间）
+	//var latencyMs int64
+	//if msg.Timestamp > 0 {
+	//	latencyMs = receiveTime - msg.Timestamp
+	//}
+
+	//c.logger.Debug("TCP Client received message",
+	//	zap.String("action", msg.Action.String()),
+	//	zap.String("id", msg.Id),
+	//	zap.Int("data_size", len(msg.Data)),
+	//	zap.Int64("msg_timestamp", msg.Timestamp),
+	//	zap.Int64("receive_timestamp", receiveTime),
+	//	zap.Int64("latency_ms", latencyMs))
+
 	// 如果是响应消息，处理待处理请求
 	if msg.Id != "" {
 		c.mu.RLock()
@@ -495,6 +542,7 @@ func (c *TCPClient) handleMessage(msg *pb.Message) {
 		c.mu.RUnlock()
 
 		if exists {
+			c.logger.Debug("Processing response message", zap.String("request_id", msg.Id))
 			select {
 			case req.ResponseCh <- msg:
 			default:
@@ -509,10 +557,20 @@ func (c *TCPClient) handleMessage(msg *pb.Message) {
 	handler, exists := c.handlers[msg.Action]
 	c.mu.RUnlock()
 
+	//c.logger.Debug("Looking for message handler",
+	//	zap.String("action", msg.Action.String()),
+	//	zap.Bool("handler_exists", exists))
+
 	if exists {
+		//c.logger.Debug("Calling message handler", zap.String("action", msg.Action.String()))
 		if err := handler(msg); err != nil {
+			c.logger.Error("Handler execution failed",
+				zap.String("action", msg.Action.String()),
+				zap.Error(err))
 			c.notifyError(fmt.Errorf("handler error: %w", err))
 		}
+	} else {
+		c.logger.Warn("No handler found for action", zap.String("action", msg.Action.String()))
 	}
 }
 
@@ -563,7 +621,7 @@ func (c *TCPClient) startAutoReconnect(disconnectErr error) {
 	atomic.AddInt64(&c.reconnectAttempts, 1)
 	currentAttempts := atomic.LoadInt64(&c.reconnectAttempts)
 
-	c.logger.Info("Starting reconnection attempt",
+	c.logger.Debug("Starting reconnection attempt",
 		zap.Int64("attempt", currentAttempts),
 		zap.Int("max_attempts", c.config.MaxReconnectAttempts),
 		zap.String("address", c.lastAddress))
@@ -581,7 +639,7 @@ func (c *TCPClient) startAutoReconnect(disconnectErr error) {
 
 	// 尝试重连
 	if err := c.attemptReconnect(); err != nil {
-		c.logger.Warn("Reconnection attempt failed",
+		c.logger.Debug("Reconnection attempt failed",
 			zap.Error(err),
 			zap.Int64("attempt", currentAttempts))
 
@@ -640,7 +698,7 @@ func (c *TCPClient) attemptReconnect() error {
 
 	c.conn = conn
 	atomic.StoreInt32(&c.state, int32(StateConnected))
-	c.logger.Info("Reconnected successfully", zap.String("address", c.lastAddress))
+	c.logger.Debug("Reconnected successfully", zap.String("address", c.lastAddress))
 
 	return nil
 }

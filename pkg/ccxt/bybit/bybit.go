@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/riven-blade/datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/protocol"
 
 	"github.com/spf13/cast"
 )
@@ -1891,28 +1892,36 @@ func (b *Bybit) WatchMarkPrice(ctx context.Context, symbol string, params map[st
 
 // GenerateChannel 生成 Bybit 特定的 WebSocket channel 名称
 func (b *Bybit) GenerateChannel(symbol string, params map[string]interface{}) string {
-	// 转换 symbol 为 Bybit 格式 (BTC/USDT -> BTCUSDT)
 	bybitSymbol := strings.ToUpper(strings.ReplaceAll(symbol, "/", ""))
 
 	eventType := cast.ToString(params["eventType"])
 
 	switch strings.ToLower(eventType) {
-	case "ticker":
+	case protocol.StreamEventMiniTicker:
 		return fmt.Sprintf("tickers.%s", bybitSymbol)
-	case "kline":
+	case protocol.StreamEventBookTicker:
+		return fmt.Sprintf("bookTicker.%s", bybitSymbol)
+	case protocol.StreamEventKline:
 		interval := cast.ToString(params["interval"])
 		if interval == "" {
 			interval = "1"
 		}
 		return fmt.Sprintf("klineV2.%s.%s", interval, bybitSymbol)
-	case "trade":
+	case protocol.StreamEventTrade:
 		return fmt.Sprintf("trade.%s", bybitSymbol)
-	case "orderbook", "depth":
+	case protocol.StreamEventOrderBook:
 		if depth := cast.ToInt(params["depth"]); depth > 0 {
 			return fmt.Sprintf("orderBookL2_%d.%s", depth, bybitSymbol)
 		}
 		return fmt.Sprintf("orderBookL2_25.%s", bybitSymbol)
+	case protocol.StreamEventMarkPrice:
+		return fmt.Sprintf("instrument_info.%s", bybitSymbol)
+	case protocol.StreamEventBalance:
+		return "wallet"
+	case protocol.StreamEventOrders:
+		return "execution"
 	default:
-		return fmt.Sprintf("%s.%s", strings.ToLower(eventType), bybitSymbol)
+		// 不支持的事件类型，返回空字符串
+		return ""
 	}
 }

@@ -114,6 +114,15 @@ func (m *Miner) Stop(ctx context.Context) error {
 	m.running = false
 	m.stats.Connected = false
 
+	// 停止交易所客户端（如果支持）
+	if stopper, ok := m.client.(interface{ Stop() error }); ok {
+		if err := stopper.Stop(); err != nil {
+			logger.Ctx(ctx).Warn("Failed to stop exchange client",
+				zap.String("exchange", m.exchange),
+				zap.Error(err))
+		}
+	}
+
 	logger.Ctx(ctx).Info("Miner stopped",
 		zap.String("exchange", m.exchange),
 		zap.String("market", m.market))
@@ -130,12 +139,10 @@ func (m *Miner) Subscribe(req *MinerSubscription) error {
 		return fmt.Errorf("miner not running")
 	}
 
-	// 生成Channel
 	req.StreamName = m.client.GenerateChannel(req.Symbol, req.GetChannelParams())
-	// 检查是否已经订阅了该streamName
 	if _, exists := m.subscriptions[req.StreamName]; exists {
-		logger.Ctx(m.ctx).Debug("channel already subscribed",
-			zap.String("channel", req.StreamName))
+		logger.Ctx(m.ctx).Debug("streamName already subscribed",
+			zap.String("streamName", req.StreamName))
 		return nil
 	}
 
@@ -153,7 +160,6 @@ func (m *Miner) Subscribe(req *MinerSubscription) error {
 	return nil
 }
 
-// Unsubscribe
 func (m *Miner) Unsubscribe(topic string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -235,7 +241,6 @@ func (m *Miner) FetchMarkets(ctx context.Context) ([]*ccxt.Market, error) {
 		return nil, fmt.Errorf("miner not running")
 	}
 
-	logger.Ctx(ctx).Debug("开始调用交易所API")
 	markets, err := client.FetchMarkets(ctx, map[string]interface{}{})
 	if err != nil {
 		logger.Ctx(ctx).Error("Failed to fetch markets",
@@ -295,7 +300,6 @@ func (m *Miner) FetchTicker(ctx context.Context, symbol string) (*ccxt.Ticker, e
 		return nil, fmt.Errorf("miner not running")
 	}
 
-	logger.Ctx(ctx).Debug("开始调用交易所ticker API")
 	// 在锁外调用API，避免阻塞其他操作
 	ticker, err := client.FetchTicker(ctx, symbol, map[string]interface{}{})
 	if err != nil {
@@ -426,7 +430,6 @@ func (m *Miner) subscribeAction(sub *MinerSubscription) {
 		zap.String("event", string(sub.Event)),
 		zap.String("topic", sub.Topic))
 
-	// 根据事件类型调用相应的Watch方法，获取专用channel
 	var subscriptionID string
 	var err error
 	params := sub.ToMap()
@@ -440,14 +443,12 @@ func (m *Miner) subscribeAction(sub *MinerSubscription) {
 		var miniTickerChan <-chan *ccxt.WatchMiniTicker
 		subscriptionID, miniTickerChan, err = m.client.WatchMiniTicker(subCtx, sub.Symbol, params)
 		if err == nil {
-			sub.DataChannel = miniTickerChan
 			go m.processMiniTickerData(subCtx, sub, miniTickerChan)
 		}
 	case EventBookTicker:
 		var bookTickerChan <-chan *ccxt.WatchBookTicker
 		subscriptionID, bookTickerChan, err = m.client.WatchBookTicker(subCtx, sub.Symbol, params)
 		if err == nil {
-			sub.DataChannel = bookTickerChan
 			go m.processBookTickerData(subCtx, sub, bookTickerChan)
 		}
 	case EventKline:
@@ -458,14 +459,12 @@ func (m *Miner) subscribeAction(sub *MinerSubscription) {
 		var klineChan <-chan *ccxt.WatchOHLCV
 		subscriptionID, klineChan, err = m.client.WatchOHLCV(subCtx, sub.Symbol, timeframe, params)
 		if err == nil {
-			sub.DataChannel = klineChan
 			go m.processKlineData(subCtx, sub, klineChan)
 		}
 	case EventTrade:
 		var tradeChan <-chan *ccxt.WatchTrade
 		subscriptionID, tradeChan, err = m.client.WatchTrade(subCtx, sub.Symbol, params)
 		if err == nil {
-			sub.DataChannel = tradeChan
 			go m.processTradeData(subCtx, sub, tradeChan)
 		}
 	case EventOrderBook:
@@ -479,14 +478,12 @@ func (m *Miner) subscribeAction(sub *MinerSubscription) {
 		var orderBookChan <-chan *ccxt.WatchOrderBook
 		subscriptionID, orderBookChan, err = m.client.WatchOrderBook(subCtx, sub.Symbol, params)
 		if err == nil {
-			sub.DataChannel = orderBookChan
 			go m.processOrderBookData(subCtx, sub, orderBookChan)
 		}
 	case EventMarkPrice:
 		var markPriceChan <-chan *ccxt.WatchMarkPrice
 		subscriptionID, markPriceChan, err = m.client.WatchMarkPrice(subCtx, sub.Symbol, params)
 		if err == nil {
-			sub.DataChannel = markPriceChan
 			go m.processMarkPriceData(subCtx, sub, markPriceChan)
 		}
 	default:
@@ -504,15 +501,12 @@ func (m *Miner) subscribeAction(sub *MinerSubscription) {
 		return
 	}
 
-	// 保存订阅ID
-	sub.SubscriptionID = subscriptionID
-
 	logger.Ctx(m.ctx).Info("Started WebSocket subscription with dedicated channel",
 		zap.String("exchange", m.exchange),
 		zap.String("symbol", sub.Symbol),
 		zap.String("event", string(sub.Event)),
 		zap.String("subscription_id", subscriptionID),
-		zap.String("StreamName", sub.StreamName))
+		zap.String("stream_name", sub.StreamName))
 }
 
 // 新架构：专用channel数据处理方法
@@ -521,7 +515,7 @@ func (m *Miner) subscribeAction(sub *MinerSubscription) {
 func (m *Miner) processMiniTickerData(ctx context.Context, sub *MinerSubscription, miniTickerChan <-chan *ccxt.WatchMiniTicker) {
 	logger.Ctx(ctx).Info("Starting mini ticker data processor",
 		zap.String("symbol", sub.Symbol),
-		zap.String("subscription_id", sub.SubscriptionID))
+		zap.String("stream", sub.StreamName))
 
 	for {
 		select {
@@ -545,7 +539,7 @@ func (m *Miner) processKlineData(ctx context.Context, sub *MinerSubscription, kl
 	logger.Ctx(ctx).Info("Starting kline data processor",
 		zap.String("symbol", sub.Symbol),
 		zap.String("interval", sub.Interval),
-		zap.String("subscription_id", sub.SubscriptionID))
+		zap.String("stream", sub.StreamName))
 
 	for {
 		select {
@@ -559,7 +553,10 @@ func (m *Miner) processKlineData(ctx context.Context, sub *MinerSubscription, kl
 					zap.String("symbol", sub.Symbol))
 				return
 			}
-			m.processOHLCV(kline) // 复用原有的处理逻辑
+			// 只有看kline 关闭了才触发事件
+			if kline.IsClosed {
+				m.processOHLCV(kline)
+			}
 		}
 	}
 }
@@ -568,7 +565,7 @@ func (m *Miner) processKlineData(ctx context.Context, sub *MinerSubscription, kl
 func (m *Miner) processTradeData(ctx context.Context, sub *MinerSubscription, tradeChan <-chan *ccxt.WatchTrade) {
 	logger.Ctx(ctx).Info("Starting trade data processor",
 		zap.String("symbol", sub.Symbol),
-		zap.String("subscription_id", sub.SubscriptionID))
+		zap.String("stream", sub.StreamName))
 
 	for {
 		select {
@@ -591,7 +588,7 @@ func (m *Miner) processTradeData(ctx context.Context, sub *MinerSubscription, tr
 func (m *Miner) processOrderBookData(ctx context.Context, sub *MinerSubscription, orderBookChan <-chan *ccxt.WatchOrderBook) {
 	logger.Ctx(ctx).Info("Starting orderbook data processor",
 		zap.String("symbol", sub.Symbol),
-		zap.String("subscription_id", sub.SubscriptionID))
+		zap.String("stream", sub.StreamName))
 
 	for {
 		select {
@@ -614,7 +611,7 @@ func (m *Miner) processOrderBookData(ctx context.Context, sub *MinerSubscription
 func (m *Miner) processMarkPriceData(ctx context.Context, sub *MinerSubscription, markPriceChan <-chan *ccxt.WatchMarkPrice) {
 	logger.Ctx(ctx).Info("Starting mark price data processor",
 		zap.String("symbol", sub.Symbol),
-		zap.String("subscription_id", sub.SubscriptionID))
+		zap.String("stream", sub.StreamName))
 
 	for {
 		select {

@@ -185,7 +185,7 @@ func (ws *WebSocketConnection) handleMessage(message []byte) {
 	}
 
 	// 优先使用"all"处理器，传递预解析的消息
-	if handler, exists := ws.messageHandlers["all"]; exists {
+	if handler, exists := ws.messageHandlers[HandlerTypeAll]; exists {
 		if err := handler(message); err != nil && ws.errorHandler != nil {
 			ws.errorHandler(err)
 		}
@@ -202,7 +202,7 @@ func (ws *WebSocketConnection) handleMessage(message []byte) {
 
 	// 查找对应的处理器
 	for topic, handler := range ws.messageHandlers {
-		if topic == "all" {
+		if topic == HandlerTypeAll {
 			continue // 已经在上面处理了
 		}
 		if channel, ok := parsedMsg.Parsed["channel"].(string); ok && channel == topic {

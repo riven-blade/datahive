@@ -4,6 +4,13 @@ import (
 	"time"
 )
 
+// ========== WebSocket 常量 ==========
+
+const (
+	// 消息处理器类型
+	HandlerTypeAll = "all" // 处理所有消息类型
+)
+
 // ========== 核心数据类型 ==========
 
 // Market 市场信息
@@ -372,22 +379,43 @@ type WatchBookTicker struct {
 
 // WatchOrderBook WebSocket 订单簿数据
 type WatchOrderBook struct {
-	OrderBook
-	StreamName string `json:"stream_name"` // 频道信息
+	Symbol     string      `json:"symbol"`      // 交易对符号
+	TimeStamp  int64       `json:"timestamp"`   // 时间戳
+	Bids       [][]float64 `json:"bids"`        // 买盘 [价格, 数量]
+	Asks       [][]float64 `json:"asks"`        // 卖盘 [价格, 数量]
+	Nonce      int64       `json:"nonce"`       // 序列号
+	StreamName string      `json:"stream_name"` // 频道信息
 }
 
 // WatchTrade WebSocket 交易数据
 type WatchTrade struct {
-	Trade
-	StreamName string `json:"stream_name"` // 频道信息
+	ID           string  `json:"id"`           // 交易ID
+	Symbol       string  `json:"symbol"`       // 交易对符号
+	Timestamp    int64   `json:"timestamp"`    // 时间戳
+	Price        float64 `json:"price"`        // 价格
+	Amount       float64 `json:"amount"`       // 数量
+	Cost         float64 `json:"cost"`         // 成本
+	Side         string  `json:"side"`         // buy/sell
+	Type         string  `json:"type"`         // 订单类型
+	TakerOrMaker string  `json:"takerOrMaker"` // taker/maker
+	Fee          float64 `json:"fee"`          // 手续费
+	FeeCurrency  string  `json:"feeCurrency"`  // 手续费货币
+	StreamName   string  `json:"stream_name"`  // 频道信息
 }
 
 // WatchOHLCV WebSocket K线数据
 type WatchOHLCV struct {
-	OHLCV
-	Symbol     string `json:"symbol"`      // 交易对
-	Timeframe  string `json:"timeframe"`   // 时间周期
-	StreamName string `json:"stream_name"` // 频道信息
+	Symbol     string  `json:"symbol"`      // 交易对符号
+	Timeframe  string  `json:"timeframe"`   // 时间周期
+	Timestamp  int64   `json:"timestamp"`   // 时间戳
+	Open       float64 `json:"open"`        // 开盘价
+	High       float64 `json:"high"`        // 最高价
+	Low        float64 `json:"low"`         // 最低价
+	Close      float64 `json:"close"`       // 收盘价
+	Volume     float64 `json:"volume"`      // 成交量
+	IsClosed   bool    `json:"is_closed"`   // 是否已关闭
+	TradeCount int64   `json:"trade_count"` // 交易笔数
+	StreamName string  `json:"stream_name"` // 频道信息
 }
 
 // WatchBalance WebSocket 余额数据
@@ -515,6 +543,25 @@ const (
 	ContractTypeOption  = "option"
 )
 
+// WebSocket 流事件后缀常量 (主要用于Binance)
+const (
+	StreamSuffixTrade        = "@trade"
+	StreamSuffixTicker       = "@ticker"
+	StreamSuffixMiniTicker   = "@miniTicker"
+	StreamSuffixBookTicker   = "@bookTicker"
+	StreamSuffixMarkPrice    = "@markPrice"
+	StreamSuffixKline        = "@kline_"
+	StreamSuffixDepth        = "@depth"
+	StreamSuffixMarkPriceAlt = "@mark_price" // 备用格式
+)
+
+// WebSocket 用户流事件常量 (Binance)
+const (
+	UserStreamBalance = "outboundAccountPosition"
+	UserStreamOrders  = "executionReport"
+	UserStreamPrefix  = "user@"
+)
+
 // PriceLevel 价格层级
 type PriceLevel struct {
 	Price  float64 `json:"price"`
@@ -533,7 +580,7 @@ type Status = ExchangeStatus
 
 // ========== 辅助函数 ==========
 
-// ToOHLCVArray 将OHLCV转换为数组格式 [timestamp, open, high, low, close, volume]
+// ToArray 将OHLCV转换为数组格式 [timestamp, open, high, low, close, volume]
 func (o *OHLCV) ToArray() []interface{} {
 	return []interface{}{
 		o.Timestamp,

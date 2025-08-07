@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"time"
+
+	"github.com/riven-blade/datahive/pkg/protocol"
 )
 
 // =============================================================================
@@ -11,7 +13,7 @@ import (
 
 const (
 	// 应用配置
-	DefaultAppName  = "github.com/riven-blade/datahive/-Spider"
+	DefaultAppName  = "github.com/riven-blade/datahive"
 	DefaultLogLevel = "info"
 
 	// 服务器配置
@@ -101,6 +103,7 @@ func DefaultConfig() *Config {
 				WSMaxReconnect:  5,
 				Timeout:         30000,
 				RateLimit:       1200,
+				DefaultType:     "future", // 默认使用期货市场以支持mark_price等数据流
 			},
 		},
 
@@ -143,13 +146,13 @@ func (c *Config) Validate() error {
 // GetChannelBufferSize 获取指定类型的channel缓冲区大小 - 使用常量
 func GetChannelBufferSize(dataType string) int {
 	switch dataType {
-	case "kline":
+	case protocol.StreamEventKline:
 		return DefaultKlineChannelBuffer
-	case "trade":
+	case protocol.StreamEventTrade:
 		return DefaultTradeChannelBuffer
-	case "depth":
+	case protocol.StreamEventOrderBook:
 		return DefaultDepthChannelBuffer
-	case "price":
+	case protocol.StreamEventMiniTicker, protocol.StreamEventBookTicker, protocol.StreamEventMarkPrice:
 		return DefaultPriceChannelBuffer
 	default:
 		return 100 // 通用默认值
@@ -160,14 +163,14 @@ func GetChannelBufferSize(dataType string) int {
 func GetRateLimit(dataType string) int64 {
 	// 使用常量值，不再需要复杂的配置
 	switch dataType {
-	case "kline":
+	case protocol.StreamEventKline:
 		return 200
-	case "trade":
+	case protocol.StreamEventTrade:
 		return 500
-	case "depth":
+	case protocol.StreamEventOrderBook:
 		return 300
-	case "price":
-		return 100
+	case protocol.StreamEventMiniTicker, protocol.StreamEventBookTicker, protocol.StreamEventMarkPrice:
+		return 150
 	default:
 		return 100
 	}

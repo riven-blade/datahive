@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/mitchellh/mapstructure"
+	"github.com/riven-blade/datahive/pkg/protocol"
 )
 
 // =============================================================================
@@ -39,13 +40,12 @@ type Event struct {
 type EventType string
 
 const (
-	EventMiniTicker EventType = "miniticker" // 轻量级ticker数据
-	EventBookTicker EventType = "bookticker" // 最优买卖价数据
-	EventFullTicker EventType = "ticker"     // 完整ticker数据
-	EventKline      EventType = "kline"      // K线数据
-	EventTrade      EventType = "trade"      // 交易数据
-	EventOrderBook  EventType = "order_book" // 订单簿数据
-	EventMarkPrice  EventType = "mark_price" // 标记价格数据(仅期货)
+	EventMiniTicker EventType = EventType(protocol.StreamEventMiniTicker) // 轻量级ticker数据
+	EventBookTicker EventType = EventType(protocol.StreamEventBookTicker) // 最优买卖价数据
+	EventKline      EventType = EventType(protocol.StreamEventKline)      // K线数据
+	EventTrade      EventType = EventType(protocol.StreamEventTrade)      // 交易数据
+	EventOrderBook  EventType = EventType(protocol.StreamEventOrderBook)  // 订单簿数据
+	EventMarkPrice  EventType = EventType(protocol.StreamEventMarkPrice)  // 标记价格数据(仅期货)
 )
 
 // SubscriptionRequest 订阅请求
@@ -66,10 +66,8 @@ type MinerSubscription struct {
 	Topic      string    `json:"topic"`              // 生成的topic作为订阅ID
 	StreamName string    `json:"stream_name"`        // stream name
 
-	// 新架构：专用channel和订阅管理
-	SubscriptionID string      `json:"subscription_id"` // WebSocket订阅ID，用于取消订阅
-	DataChannel    interface{} `json:"-"`               // 专用数据channel，根据Event类型存储不同类型的channel
-	CancelFunc     func()      `json:"-"`               // 取消该订阅的函数
+	SubscriptionID string `json:"subscription_id"` // WebSocket订阅ID，用于取消订阅
+	CancelFunc     func() `json:"-"`               // 取消该订阅的函数
 }
 
 func (m *MinerSubscription) ToMap() map[string]interface{} {

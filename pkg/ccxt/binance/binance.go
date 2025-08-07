@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cast"
 
 	"github.com/riven-blade/datahive/pkg/ccxt"
+	"github.com/riven-blade/datahive/pkg/protocol"
 )
 
 // 注册Binance交易所
@@ -58,7 +59,7 @@ type Binance struct {
 	subscriptions map[string]string
 
 	// WebSocket连接池 - 支持多实例管理
-	wsPool *WebSocketPool
+	wsClient *WebSocket
 
 	// 速率限制器
 	rateLimiter *RateLimiter
@@ -86,11 +87,6 @@ func New(config *Config) (*Binance, error) {
 		rateLimiter:   NewRateLimiter(),
 	}
 
-	// 初始化WebSocket连接池
-	if config.EnableWebSocket {
-		binance.wsPool = NewWebSocketPool(binance)
-	}
-
 	// 设置基础信息
 	binance.SetBasicInfo()
 
@@ -103,6 +99,15 @@ func New(config *Config) (*Binance, error) {
 	// 设置API端点
 	binance.SetEndpoints()
 
+	// 初始化WebSocket连接池 (在endpoints设置之后)
+	if config.EnableWebSocket {
+		binance.wsClient = NewWebSocket(binance, DefaultWebSocketConfig())
+		// 启动WebSocket客户端
+		if err := binance.wsClient.Start(); err != nil {
+			return nil, fmt.Errorf("failed to start WebSocket client: %w", err)
+		}
+	}
+
 	// 设置市场
 	_, err := binance.LoadMarkets(context.Background())
 	if err != nil {
@@ -113,6 +118,14 @@ func New(config *Config) (*Binance, error) {
 	binance.SetFees()
 
 	return binance, nil
+}
+
+// Stop 停止Binance实例，清理资源
+func (b *Binance) Stop() error {
+	if b.wsClient != nil {
+		b.wsClient.Stop()
+	}
+	return nil
 }
 
 func (b *Binance) GetKlineChannel() <-chan *ccxt.WatchOHLCV {
@@ -127,7 +140,6 @@ func (b *Binance) GetOrderBookChannel() <-chan *ccxt.WatchOrderBook {
 	return nil
 }
 
-// GenerateChannel
 func (b *Binance) GenerateChannel(symbol string, params map[string]interface{}) string {
 	if symbol == "" {
 		return ""
@@ -151,23 +163,32 @@ func (b *Binance) GenerateChannel(symbol string, params map[string]interface{}) 
 	eventType := cast.ToString(params["eventType"])
 
 	switch strings.ToLower(eventType) {
-	case "ticker":
-		return fmt.Sprintf("%s@ticker", marketID)
-	case "kline":
+	case protocol.StreamEventMiniTicker:
+		return fmt.Sprintf("%s%s", marketID, ccxt.StreamSuffixMiniTicker)
+	case protocol.StreamEventBookTicker:
+		return fmt.Sprintf("%s%s", marketID, ccxt.StreamSuffixBookTicker)
+	case protocol.StreamEventKline:
 		interval := cast.ToString(params["interval"])
 		if interval == "" {
 			interval = "1m"
 		}
-		return fmt.Sprintf("%s@kline_%s", marketID, interval)
-	case "trade":
-		return fmt.Sprintf("%s@trade", marketID)
-	case "orderbook", "depth":
+		return fmt.Sprintf("%s%s%s", marketID, ccxt.StreamSuffixKline, interval)
+	case protocol.StreamEventTrade:
+		return fmt.Sprintf("%s%s", marketID, ccxt.StreamSuffixTrade)
+	case protocol.StreamEventOrderBook:
 		if depth := cast.ToInt(params["depth"]); depth > 0 {
-			return fmt.Sprintf("%s@depth%d", marketID, depth)
+			return fmt.Sprintf("%s%s%d", marketID, ccxt.StreamSuffixDepth, depth)
 		}
-		return fmt.Sprintf("%s@depth", marketID)
+		return fmt.Sprintf("%s%s", marketID, ccxt.StreamSuffixDepth)
+	case protocol.StreamEventMarkPrice:
+		return fmt.Sprintf("%s%s", marketID, ccxt.StreamSuffixMarkPrice)
+	case protocol.StreamEventBalance:
+		return ccxt.UserStreamBalance
+	case protocol.StreamEventOrders:
+		return ccxt.UserStreamOrders
 	default:
-		return fmt.Sprintf("%s@%s", marketID, strings.ToLower(eventType))
+		// 不支持的事件类型，返回空字符串
+		return ""
 	}
 }
 
@@ -286,14 +307,14 @@ func (b *Binance) SetEndpoints() {
 	// 根据市场类型设置正确的WebSocket URL
 	var wsURL string
 	if b.config.TestNet {
-		if b.marketType == "future" {
+		if b.marketType == "future" || b.marketType == "futures" {
 			wsURL = "wss://fstream.binancefuture.com/ws"
 		} else {
 			wsURL = "wss://testnet.binance.vision/ws"
 		}
 	} else {
 		switch b.marketType {
-		case "future":
+		case "future", "futures":
 			wsURL = "wss://fstream.binance.com/ws"
 		case "delivery":
 			wsURL = "wss://dstream.binance.com/ws"
@@ -3966,75 +3987,66 @@ func (b *Binance) extractPath(fullURL string) string {
 
 // WatchOrderBook 观察订单簿
 func (b *Binance) WatchOrderBook(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchOrderBook, error) {
-	if b.wsPool == nil {
+	if b.wsClient == nil {
 		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
 
-	return b.wsPool.WatchOrderBook(ctx, symbol, params)
+	return b.wsClient.SubscribeOrderBook(symbol, params)
 }
 
 // WatchTrade 观察交易数据
 func (b *Binance) WatchTrade(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchTrade, error) {
-	if b.wsPool == nil {
+	if b.wsClient == nil {
 		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
 
-	return b.wsPool.WatchTrades(ctx, symbol, params)
+	return b.wsClient.SubscribeTrades(symbol, params)
 }
 
 // WatchOHLCV 观察K线数据
 func (b *Binance) WatchOHLCV(ctx context.Context, symbol, timeframe string, params map[string]interface{}) (string, <-chan *ccxt.WatchOHLCV, error) {
-	if b.wsPool == nil {
+	if b.wsClient == nil {
 		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
 
-	return b.wsPool.WatchOHLCV(ctx, symbol, timeframe, params)
+	return b.wsClient.SubscribeKlines(symbol, timeframe, params)
 }
 
 // WatchBalance 观察账户余额
 func (b *Binance) WatchBalance(ctx context.Context, params map[string]interface{}) (string, <-chan *ccxt.WatchBalance, error) {
-	if b.wsPool == nil {
-		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
-	}
-	return b.wsPool.WatchBalance(ctx, params)
+	// 用户数据流需要通过UserDataManager处理，暂未实现
+	return "", nil, ccxt.NewNotSupported("WatchBalance: User data streams not implemented in new WebSocket client yet")
 }
 
 // WatchOrders 观察订单状态
 func (b *Binance) WatchOrders(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchOrder, error) {
-	if b.wsPool == nil {
-		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
-	}
-
-	return b.wsPool.WatchOrders(ctx, params)
+	// 用户数据流需要通过UserDataManager处理，暂未实现
+	return "", nil, ccxt.NewNotSupported("WatchOrders: User data streams not implemented in new WebSocket client yet")
 }
-
-// =====================================================================================
-// 新增的增强Watch方法 - 支持新协议
-// =====================================================================================
 
 // WatchMiniTicker 监听轻量级ticker数据
 func (b *Binance) WatchMiniTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMiniTicker, error) {
-	if b.wsPool == nil {
+	if b.wsClient == nil {
 		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
 
-	return b.wsPool.WatchMiniTicker(ctx, symbol, params)
+	return b.wsClient.SubscribeMiniTicker(symbol, params)
 }
 
 // WatchMarkPrice 监听标记价格数据(仅期货)
 func (b *Binance) WatchMarkPrice(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchMarkPrice, error) {
-	if b.wsPool == nil {
+	if b.wsClient == nil {
 		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
 
-	return b.wsPool.WatchMarkPrice(ctx, symbol, params)
+	return b.wsClient.SubscribeMarkPrice(symbol, params)
 }
 
 // WatchBookTicker 监听最优买卖价数据
 func (b *Binance) WatchBookTicker(ctx context.Context, symbol string, params map[string]interface{}) (string, <-chan *ccxt.WatchBookTicker, error) {
-	if b.wsPool == nil {
+	if b.wsClient == nil {
 		return "", nil, ccxt.NewNotSupported("WebSocket not enabled")
 	}
 
-	return b.wsPool.WatchBookTicker(ctx, symbol, params)
+	return b.wsClient.SubscribeBookTicker(symbol, params)
 }

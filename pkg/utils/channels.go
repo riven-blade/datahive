@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/riven-blade/datahive/pkg/protocol"
 	"github.com/spf13/cast"
 )
 
@@ -12,17 +13,17 @@ import (
 func GenerateTopic(exchange, market, symbol, eventType, interval string, depth int) string {
 	symbol = strings.ToLower(symbol)
 	switch strings.ToLower(eventType) {
-	case "kline":
+	case protocol.StreamEventKline:
 		if interval == "" {
 			interval = "1m" // 默认1分钟
 		}
 		return fmt.Sprintf("%s_%s_%s_%s_%s", exchange, market, symbol, eventType, interval)
-	case "orderbook", "depth":
+	case protocol.StreamEventOrderBook:
 		if depth > 0 {
 			return fmt.Sprintf("%s_%s_%s_%s_%d", exchange, market, symbol, eventType, depth)
 		}
 		return fmt.Sprintf("%s_%s_%s_%s", exchange, market, symbol, eventType)
-	case "trade", "ticker":
+	case protocol.StreamEventTrade, protocol.StreamEventMiniTicker, protocol.StreamEventBookTicker, protocol.StreamEventMarkPrice:
 		return fmt.Sprintf("%s_%s_%s_%s", exchange, market, symbol, eventType)
 	default:
 		return fmt.Sprintf("%s_%s_%s_%s", exchange, market, symbol, eventType)

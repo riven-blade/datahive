@@ -975,12 +975,12 @@ func (b *Binance) positionToMap(position *FuturesPositionRisk) map[string]interf
 }
 
 // parseAccountBalance 解析账户余额数据 (WebSocket版本)
-func (ws *BinanceWebSocket) parseAccountBalance(data map[string]interface{}) *ccxt.Account {
+func (ws *WebSocket) parseAccountBalance(data map[string]interface{}) *ccxt.Account {
 	return ws.exchange.parseAccountBalance(data)
 }
 
 // parseOrderUpdate 解析订单更新数据 (WebSocket版本)
-func (ws *BinanceWebSocket) parseOrderUpdate(data map[string]interface{}) *ccxt.Order {
+func (ws *WebSocket) parseOrderUpdate(data map[string]interface{}) *ccxt.Order {
 	return ws.exchange.parseOrderUpdate(data)
 }
 
@@ -1159,7 +1159,7 @@ func (b *Binance) ParseMiniTicker(data map[string]interface{}, symbol string) *c
 		Close:       b.SafeFloat(data, "c", 0),
 		Volume:      b.SafeFloat(data, "v", 0),
 		QuoteVolume: b.SafeFloat(data, "q", 0),
-		StreamName:  fmt.Sprintf("%s@miniTicker", strings.ToLower(symbol)),
+		StreamName:  fmt.Sprintf("%s%s", strings.ToLower(symbol), ccxt.StreamSuffixMiniTicker),
 	}
 }
 
@@ -1170,12 +1170,12 @@ func (b *Binance) ParseMarkPrice(data map[string]interface{}, symbol string) *cc
 	return &ccxt.WatchMarkPrice{
 		Symbol:               symbol,
 		TimeStamp:            timestamp,
-		MarkPrice:            b.SafeFloat(data, "m", 0),
+		MarkPrice:            b.SafeFloat(data, "p", 0), // 修复：使用正确的字段名 "p"
 		IndexPrice:           b.SafeFloat(data, "i", 0),
 		EstimatedSettlePrice: b.SafeFloat(data, "P", 0),
 		FundingRate:          b.SafeFloat(data, "r", 0),
 		FundingTime:          b.SafeInt(data, "T", 0),
-		StreamName:           fmt.Sprintf("%s@mark_price", strings.ToLower(symbol)),
+		StreamName:           fmt.Sprintf("%s%s", strings.ToLower(symbol), ccxt.StreamSuffixMarkPriceAlt),
 	}
 }
 

@@ -4,6 +4,108 @@ import (
 	"encoding/json"
 )
 
+// ========== Binance WebSocket 事件类型常数 ==========
+
+// Binance原生WebSocket事件类型
+const (
+	EventTypeTrade          = "trade"           // 交易事件
+	EventType24hrTicker     = "24hrTicker"      // 24小时价格统计事件
+	EventType24hrMiniTicker = "24hrMiniTicker"  // 24小时迷你价格统计事件
+	EventTypeBookTicker     = "bookTicker"      // 最优挂单信息事件
+	EventTypeMarkPrice      = "markPriceUpdate" // 标记价格更新事件（期货）
+	EventTypeKline          = "kline"           // K线事件
+	EventTypeDepthUpdate    = "depthUpdate"     // 深度更新事件
+	EventTypeBalanceUpdate  = "balanceUpdate"   // 余额更新事件
+)
+
+// ========== Binance WebSocket 字段名称常量 ==========
+
+// 通用字段
+const (
+	FieldEventType = "e" // 事件类型
+	FieldEventTime = "E" // 事件时间
+	FieldSymbol    = "s" // 交易对
+)
+
+// Ticker 相关字段
+const (
+	FieldOpen        = "o" // 开盘价
+	FieldHigh        = "h" // 最高价
+	FieldLow         = "l" // 最低价
+	FieldClose       = "c" // 收盘价
+	FieldVolume      = "v" // 成交量
+	FieldQuoteVolume = "q" // 成交额
+)
+
+// 标记价格相关字段
+const (
+	FieldMarkPrice   = "p" // 标记价格 (markPriceUpdate 事件中是 "p")
+	FieldIndexPrice  = "i" // 指数价格
+	FieldFundingRate = "r" // 资金费率
+	FieldFundingTime = "T" // 资金费时间
+)
+
+// BookTicker 相关字段
+const (
+	FieldUpdateId = "u" // 更新ID
+	FieldBidPrice = "b" // 买价
+	FieldBidQty   = "B" // 买量
+	FieldAskPrice = "a" // 卖价
+	FieldAskQty   = "A" // 卖量
+)
+
+// 交易相关字段
+const (
+	FieldTradeId   = "t" // 交易ID
+	FieldPrice     = "p" // 价格
+	FieldQuantity  = "q" // 数量
+	FieldTradeTime = "T" // 交易时间
+)
+
+// K线相关字段
+const (
+	FieldKlineData      = "k" // K线数据
+	FieldKlineStartTime = "t" // K线开始时间
+	FieldKlineInterval  = "i" // K线间隔
+)
+
+// WebSocket 协议字段
+const (
+	FieldStream = "stream" // 流名称
+	FieldData   = "data"   // 数据内容
+	FieldResult = "result" // 响应结果
+	FieldError  = "error"  // 错误信息
+	FieldMethod = "method" // 方法名称
+	FieldParams = "params" // 参数
+	FieldId     = "id"     // 请求ID
+)
+
+// 参数字段常量
+const (
+	ParamStream = "stream_name" // 自定义流名称参数
+)
+
+// WebSocket 方法常量
+const (
+	MethodSubscribe   = "SUBSCRIBE"          // 订阅
+	MethodUnsubscribe = "UNSUBSCRIBE"        // 取消订阅
+	MethodListStreams = "LIST_SUBSCRIPTIONS" // 列出订阅
+	MethodSetProperty = "SET_PROPERTY"       // 设置属性
+	MethodGetProperty = "GET_PROPERTY"       // 获取属性
+)
+
+// WebSocket 流名称模板常量
+const (
+	StreamTemplateTrade        = "%s@trade"      // 交易流模板
+	StreamTemplateTicker       = "%s@ticker"     // 24小时ticker流模板
+	StreamTemplateMiniTicker   = "%s@miniTicker" // 迷你ticker流模板
+	StreamTemplateBookTicker   = "%s@bookTicker" // 最优挂单流模板
+	StreamTemplateMarkPrice    = "%s@markPrice"  // 标记价格流模板
+	StreamTemplateDepth        = "%s@depth"      // 深度流模板
+	StreamTemplateKline        = "%s@kline_%s"   // K线流模板 (symbol, interval)
+	StreamTemplateKlineDefault = "%s@kline_1m"   // 默认K线流模板
+)
+
 // ========== 通用响应结构 ==========
 
 // APIResponse Binance API 通用响应

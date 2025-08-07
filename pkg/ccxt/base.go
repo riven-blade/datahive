@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/riven-blade/datahive/pkg/protocol"
 	"github.com/spf13/cast"
 )
 
@@ -1006,22 +1007,36 @@ func (b *BaseExchange) WatchOrders(ctx context.Context, symbol string, params ma
 // GenerateChannel 生成交易所特定的 WebSocket channel 名称（默认实现）
 func (b *BaseExchange) GenerateChannel(symbol string, params map[string]interface{}) string {
 	normalizedSymbol := strings.ReplaceAll(symbol, "/", "")
-
 	eventType := cast.ToString(params["eventType"])
-	if eventType == "" {
-		eventType = "unknown"
-	}
 
-	base := fmt.Sprintf("%s_%s", normalizedSymbol, eventType)
-
-	if interval := cast.ToString(params["interval"]); interval != "" {
-		base += "_" + interval
+	switch strings.ToLower(eventType) {
+	case protocol.StreamEventMiniTicker:
+		return fmt.Sprintf("%s_miniticker", normalizedSymbol)
+	case protocol.StreamEventBookTicker:
+		return fmt.Sprintf("%s_bookticker", normalizedSymbol)
+	case protocol.StreamEventKline:
+		interval := cast.ToString(params["interval"])
+		if interval == "" {
+			interval = "1m"
+		}
+		return fmt.Sprintf("%s_kline_%s", normalizedSymbol, interval)
+	case protocol.StreamEventTrade:
+		return fmt.Sprintf("%s_trade", normalizedSymbol)
+	case protocol.StreamEventOrderBook:
+		if depth := cast.ToInt(params["depth"]); depth > 0 {
+			return fmt.Sprintf("%s_orderbook_%d", normalizedSymbol, depth)
+		}
+		return fmt.Sprintf("%s_orderbook", normalizedSymbol)
+	case protocol.StreamEventMarkPrice:
+		return fmt.Sprintf("%s_markprice", normalizedSymbol)
+	case protocol.StreamEventBalance:
+		return "balance"
+	case protocol.StreamEventOrders:
+		return "orders"
+	default:
+		// 不支持的事件类型，返回空字符串
+		return ""
 	}
-	if depth := cast.ToInt(params["depth"]); depth > 0 {
-		base += fmt.Sprintf("_%d", depth)
-	}
-
-	return base
 }
 
 // 交易所特定方法的默认实现

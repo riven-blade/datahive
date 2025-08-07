@@ -224,6 +224,26 @@ func (q *QuestDBStorage) initTables(ctx context.Context) error {
 		return ErrQueryError("failed to create tickers table", err)
 	}
 
+	// 创建MiniTicker数据表
+	createMiniTickersTable := `
+		CREATE TABLE IF NOT EXISTS mini_tickers (
+			exchange     SYMBOL,
+			symbol       SYMBOL,
+			timestamp    TIMESTAMP,
+			open         DOUBLE,
+			high         DOUBLE,
+			low          DOUBLE,
+			close        DOUBLE,
+			volume       DOUBLE,
+			quote_volume DOUBLE
+		) TIMESTAMP(timestamp) PARTITION BY DAY
+		DEDUP UPSERT KEYS(timestamp, exchange, symbol);
+	`
+
+	if _, err := q.db.ExecContext(ctx, createMiniTickersTable); err != nil {
+		return ErrQueryError("failed to create mini_tickers table", err)
+	}
+
 	logger.Ctx(ctx).Info("数据库表结构初始化完成")
 	return nil
 }
